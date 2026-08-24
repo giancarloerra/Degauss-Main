@@ -51,6 +51,10 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "hardware.h"
 #include "menu.h"
 #include "support/degauss/degauss_launcher.h"
+
+// Degauss: true while the frontend, rather than an ordinary script, owns
+// the framebuffer terminal.
+static bool degauss_running = false;
 #include "user_io.h"
 #include "debug.h"
 #include "fpga_io.h"
@@ -7450,10 +7454,21 @@ void HandleUI(void)
 			static char cmd[1024 * 2];
 			const char *path = getFullPath(selPath);
 			menustate = MENU_SCRIPTS_FB2;
+			// Degauss: a frontend is not a script whose output anyone
+			// reads. Remembered here because the state that ends the run
+			// no longer knows which path started it.
+			degauss_running = degauss_is_frontend_script(selPath);
 			video_chvt(2);
 			video_fb_enable(1);
 			vga_nag();
-			sprintf(cmd, "#!/bin/bash\nexport LC_ALL=en_US.UTF-8\nexport HOME=/root\ncd $(dirname %s)\n%s\necho \"Press any key to continue\"\n", path, path);
+			if (degauss_running)
+			{
+				sprintf(cmd, "#!/bin/bash\nexport LC_ALL=en_US.UTF-8\nexport HOME=/root\ncd $(dirname %s)\n%s\n", path, path);
+			}
+			else
+			{
+				sprintf(cmd, "#!/bin/bash\nexport LC_ALL=en_US.UTF-8\nexport HOME=/root\ncd $(dirname %s)\n%s\necho \"Press any key to continue\"\n", path, path);
+			}
 
 			unlink("/tmp/script");
 			FileSave("/tmp/script", cmd, strlen(cmd));
@@ -7461,6 +7476,14 @@ void HandleUI(void)
 			ttypid = fork();
 			if (!ttypid)
 			{
+				if (degauss_running)
+				{
+					// -i drops the issue file, -n the login prompt: between
+					// them they are the "Welcome to MiSTer" and "login: root
+					// (automatic login)" that would otherwise flash up
+					// before the frontend has drawn anything.
+					execl("/sbin/agetty", "/sbin/agetty", "-n", "-i", "-a", "root", "-l", "/tmp/script", "--nohostname", "-L", "tty2", "linux", NULL);
+				}
 				execl("/sbin/agetty", "/sbin/agetty", "-a", "root", "-l", "/tmp/script", "--nohostname", "-L", "tty2", "linux", NULL);
 				exit(0); //should never be reached
 			}
@@ -7478,6 +7501,19 @@ void HandleUI(void)
 			{
 				ttypid = 0;
 				user_io_osd_key_enable(1);
+				// Degauss: nothing was printed for anyone to read, and the
+				// user already chose to leave, so go straight back rather
+				// than asking them to press something first.
+				if (degauss_running)
+				{
+					degauss_running = false;
+					video_menu_bg(user_io_status_get("[3:1]"));
+					video_fb_enable(0);
+					menustate = MENU_SYSTEM1;
+					menusub = 3;
+					OsdClear();
+					OsdEnable(DISABLE_KEYBOARD);
+				}
 			}
 		}
 		else

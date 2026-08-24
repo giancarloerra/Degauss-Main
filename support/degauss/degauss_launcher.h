@@ -31,6 +31,15 @@ bool degauss_should_take_menu(char *path, int size);
 // through the whole menu.
 #define DEGAUSS_MENUSUB 31
 
+// True when `path` names the frontend's own script.
+//
+// The frontend draws its own screen and leaves on purpose, so it wants
+// neither the console banner on the way in nor the "press any key" on the
+// way out that an ordinary shell script needs. Asking about the path
+// rather than about how it was started covers both routes to it: the
+// automatic handover above, and picking it from the Scripts menu by hand.
+bool degauss_is_frontend_script(const char *path);
+
 // True when the frontend is installed, so the Frontend entry is worth
 // drawing. A card without Degauss gets the stock menu untouched.
 bool degauss_installed(void);

@@ -16,6 +16,14 @@
 // not is left alone.
 #define DEGAUSS_SCRIPT "Scripts/degauss.sh"
 
+bool degauss_is_frontend_script(const char *path)
+{
+	if (!path) return false;
+	const char *slash = strrchr(path, '/');
+	const char *name = slash ? slash + 1 : path;
+	return !strcmp(name, "degauss.sh");
+}
+
 bool degauss_installed(void)
 {
 	return FileExists(DEGAUSS_SCRIPT) != 0;
