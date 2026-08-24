@@ -50,6 +50,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "osd.h"
 #include "hardware.h"
 #include "menu.h"
+#include "support/degauss/degauss_launcher.h"
 #include "user_io.h"
 #include "debug.h"
 #include "fpga_io.h"
@@ -1106,6 +1107,17 @@ static void *close_pipe_async(void *arg)
 void HandleUI(void)
 {
 	PROFILE_FUNCTION();
+
+	// Degauss: when the menu core comes up, hand the screen to the
+	// frontend instead of showing the stock menu. Done by entering the
+	// Scripts state the OSD itself uses, which is what sets the console to
+	// VT 2 and so makes Main hold its own hotkeys back while the frontend
+	// owns the screen. Exiting the frontend returns here with the stock
+	// menu, and it is not started again until the next core load.
+	if (menustate == MENU_NONE1 && degauss_should_take_menu(selPath, sizeof(selPath)))
+	{
+		menustate = MENU_SCRIPTS_FB;
+	}
 
 	if (bt_timer >= 0)
 	{
@@ -2862,6 +2874,14 @@ void HandleUI(void)
 			helptext_idx = 0;
 			reboot_req = 0;
 
+			// Degauss: arriving here fresh, start on Frontend. It is the
+			// reason most people open this menu from inside a game, and it
+			// saves walking to it.
+			if (parentstate != MENU_COMMON1 && !menusub && degauss_installed())
+			{
+				menusub = DEGAUSS_MENUSUB;
+			}
+
 			OsdSetTitle("System", 0);
 			menustate = MENU_COMMON2;
 			parentstate = MENU_COMMON1;
@@ -2874,6 +2894,17 @@ void HandleUI(void)
 
 				if (!menusub) firstmenu = 0;
 				adjvisible = 0;
+
+				// Degauss: the way back. Inside a game there is otherwise
+				// no route to the frontend short of a reboot, because
+				// leaving a core means loading the menu core and only the
+				// OSD can ask for that.
+				if (degauss_installed())
+				{
+					MenuWrite(n++, " Frontend", menusub == DEGAUSS_MENUSUB, 0);
+					MenuWrite(n++);
+					menumask |= (1ULL << DEGAUSS_MENUSUB);
+				}
 
 				MenuWrite(n++, " Core                      \x16", menusub == 0, 0);
 				MenuWrite(n++);
@@ -3102,6 +3133,13 @@ void HandleUI(void)
 			case 16:
 				menustate = MENU_ABOUT1;
 				menusub = 0;
+				break;
+
+			case DEGAUSS_MENUSUB:
+				// Loading the menu core is what makes Main re-execute
+				// itself, and that is where the frontend is started from.
+				// No hold handling: this is not the cold reboot item.
+				reboot_req = 1;
 				break;
 
 			case 17:
