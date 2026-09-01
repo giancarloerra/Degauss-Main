@@ -40,8 +40,8 @@ bool degauss_should_take_menu(char *path, int size);
 // automatic handover above, and picking it from the Scripts menu by hand.
 bool degauss_is_frontend_script(const char *path);
 
-// True when the frontend is installed, so the Frontend entry is worth
-// drawing. A card without Degauss gets the stock menu untouched.
+// True when the frontend script and framebuffer terminal are available, so
+// the Frontend entry can work. Other cards get the stock menu untouched.
 bool degauss_installed(void);
 
 #endif

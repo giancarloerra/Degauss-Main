@@ -51,10 +51,12 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "hardware.h"
 #include "menu.h"
 #include "support/degauss/degauss_launcher.h"
+#include "support/degauss/degauss_shortcut.h"
 
 // Degauss: true while the frontend, rather than an ordinary script, owns
 // the framebuffer terminal.
 static bool degauss_running = false;
+static bool degauss_shortcut_save_failed = false;
 #include "user_io.h"
 #include "debug.h"
 #include "fpga_io.h"
@@ -85,6 +87,10 @@ enum MENU
 	MENU_SYSTEM2,
 	MENU_COMMON1,
 	MENU_COMMON2,
+	MENU_DEGAUSS_SHORTCUT1,
+	MENU_DEGAUSS_SHORTCUT2,
+	MENU_DEGAUSS_SHORTCUT_CAPTURE1,
+	MENU_DEGAUSS_SHORTCUT_CAPTURE2,
 	MENU_MISC1,
 	MENU_MISC2,
 
@@ -570,6 +576,11 @@ void menu_key_set(unsigned int c)
 {
 	//printf("OSD enqueue: %x\n", c);
 	menu_key = c;
+}
+
+bool menu_osd_is_unlocked(void)
+{
+	return osd_unlocked;
 }
 
 // get key status
@@ -1596,6 +1607,12 @@ void HandleUI(void)
 		osd_unlocked = 1;
 		osd_lock_timer = GetTimer(cfg.osd_lock_time * 1000);
 		break;
+	}
+
+	if (degauss_shortcut_take_request())
+	{
+		fpga_load_rbf("menu.rbf");
+		return;
 	}
 
 	// Switch to current menu screen
@@ -2905,7 +2922,7 @@ void HandleUI(void)
 				// OSD can ask for that.
 				if (degauss_installed())
 				{
-					MenuWrite(n++, " Frontend", menusub == DEGAUSS_MENUSUB, 0);
+					MenuWrite(n++, " Frontend                  \x16", menusub == DEGAUSS_MENUSUB, 0);
 					MenuWrite(n++);
 					menumask |= (1ULL << DEGAUSS_MENUSUB);
 				}
@@ -3010,6 +3027,13 @@ void HandleUI(void)
 			fs_MenuCancel = MENU_COMMON1;
 
 			if (recent_init(-1)) menustate = MENU_RECENT1;
+			break;
+		}
+
+		if (right && menusub == DEGAUSS_MENUSUB)
+		{
+			menustate = MENU_DEGAUSS_SHORTCUT1;
+			menusub = 0;
 			break;
 		}
 
@@ -3208,6 +3232,141 @@ void HandleUI(void)
 		}
 
 		if(!hold_cnt && reboot_req) fpga_load_rbf("menu.rbf");
+		break;
+
+	case MENU_DEGAUSS_SHORTCUT1:
+		{
+			helptext_idx = 0;
+			firstmenu = 0;
+			adjvisible = 0;
+			OsdSetSize(16);
+			OsdSetTitle("Frontend shortcut", 0);
+			parentstate = MENU_DEGAUSS_SHORTCUT1;
+			menustate = MENU_DEGAUSS_SHORTCUT2;
+
+			int n = 0;
+			const bool invalid = degauss_shortcut_load_state() == DEGAUSS_SHORTCUT_INVALID;
+			if (invalid)
+			{
+				menumask = 0x3;
+				MenuWrite(n++, " Invalid shortcut config", 0, 1);
+				MenuWrite(n++);
+				MenuWrite(n++, " Reset both to Off", menusub == 0);
+				if (degauss_shortcut_save_failed) MenuWrite(n++, " Reset failed", 0, 1);
+				while (n < OsdGetSize() - 1) MenuWrite(n++);
+				MenuWrite(n++, STD_BACK, menusub == 1, 0, OSD_ARROW_LEFT);
+			}
+			else
+			{
+				menumask = 0x7;
+				const uint16_t key = degauss_shortcut_keyboard_key();
+				if (key) snprintf(s, sizeof(s), " Keyboard: key code %u", key);
+				else snprintf(s, sizeof(s), " Keyboard: Off");
+				MenuWrite(n++, s, menusub == 0);
+
+				snprintf(s, sizeof(s), " Controller: %s",
+					degauss_shortcut_controller_name(degauss_shortcut_controller_button()));
+				MenuWrite(n++, s, menusub == 1);
+				MenuWrite(n++);
+				MenuWrite(n++, " A: set/capture   X: Off", 0, 1);
+				if (degauss_shortcut_save_failed)
+				{
+					MenuWrite(n++, " Save failed", 0, 1);
+				}
+				while (n < OsdGetSize() - 1) MenuWrite(n++);
+				MenuWrite(n++, STD_BACK, menusub == 2, 0, OSD_ARROW_LEFT);
+			}
+		}
+		break;
+
+	case MENU_DEGAUSS_SHORTCUT2:
+		{
+			const bool invalid = degauss_shortcut_load_state() == DEGAUSS_SHORTCUT_INVALID;
+			if (menu || back || (left && (invalid || menusub != 1)))
+			{
+				degauss_shortcut_cancel_keyboard_capture();
+				menustate = MENU_COMMON1;
+				menusub = DEGAUSS_MENUSUB;
+				break;
+			}
+
+			if (invalid)
+			{
+				if (select && menusub == 0)
+				{
+					degauss_shortcut_save_failed = !degauss_shortcut_reset();
+					menustate = MENU_DEGAUSS_SHORTCUT1;
+				}
+				else if (select && menusub == 1)
+				{
+					menustate = MENU_COMMON1;
+					menusub = DEGAUSS_MENUSUB;
+				}
+				break;
+			}
+
+			if (c == KEY_TAB && menusub <= 1)
+			{
+				degauss_shortcut_save_failed = menusub == 0
+					? !degauss_shortcut_set_keyboard(0)
+					: !degauss_shortcut_set_controller(degauss_shortcut_logic::CONTROLLER_OFF);
+				menustate = MENU_DEGAUSS_SHORTCUT1;
+			}
+			else if (select && menusub == 0)
+			{
+				degauss_shortcut_begin_keyboard_capture();
+				menustate = MENU_DEGAUSS_SHORTCUT_CAPTURE1;
+			}
+			else if ((select || left || right || minus || plus) && menusub == 1)
+			{
+				int button = degauss_shortcut_controller_button();
+				const int direction = (left || minus) ? -1 : 1;
+				button += direction;
+				if (button < 0) button = degauss_shortcut_logic::CONTROLLER_COUNT - 1;
+				if (button >= degauss_shortcut_logic::CONTROLLER_COUNT) button = 0;
+				degauss_shortcut_save_failed = !degauss_shortcut_set_controller(button);
+				menustate = MENU_DEGAUSS_SHORTCUT1;
+			}
+			else if (select && menusub == 2)
+			{
+				menustate = MENU_COMMON1;
+				menusub = DEGAUSS_MENUSUB;
+			}
+		}
+		break;
+
+	case MENU_DEGAUSS_SHORTCUT_CAPTURE1:
+		{
+			firstmenu = 0;
+			menumask = 0;
+			OsdSetSize(16);
+			OsdSetTitle("Keyboard shortcut", 0);
+			MenuWrite(0, "");
+			MenuWrite(1, " Press one keyboard key");
+			MenuWrite(2, "");
+			MenuWrite(3, " Pad Menu/B: cancel", 0, 1);
+			for (int n = 4; n < OsdGetSize(); n++) MenuWrite(n, "");
+			menustate = MENU_DEGAUSS_SHORTCUT_CAPTURE2;
+		}
+		break;
+
+	case MENU_DEGAUSS_SHORTCUT_CAPTURE2:
+		if (menu || back)
+		{
+			degauss_shortcut_cancel_keyboard_capture();
+			menustate = MENU_DEGAUSS_SHORTCUT1;
+			menusub = 0;
+		}
+		else
+		{
+			uint16_t key = 0;
+			if (degauss_shortcut_take_keyboard_capture(&key))
+			{
+				degauss_shortcut_save_failed = !degauss_shortcut_set_keyboard(key);
+				menustate = MENU_DEGAUSS_SHORTCUT1;
+				menusub = 0;
+			}
+		}
 		break;
 
 	case MENU_VIDEOPROC1:

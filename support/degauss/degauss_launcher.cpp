@@ -26,7 +26,7 @@ bool degauss_is_frontend_script(const char *path)
 
 bool degauss_installed(void)
 {
-	return FileExists(DEGAUSS_SCRIPT) != 0;
+	return cfg.fb_terminal && FileExists(DEGAUSS_SCRIPT);
 }
 
 bool degauss_should_take_menu(char *path, int size)
@@ -45,9 +45,7 @@ bool degauss_should_take_menu(char *path, int size)
 	// Without the framebuffer terminal there is no way to give a program
 	// the screen at all, and the Scripts menu is equally dead. Leaving the
 	// stock menu up is the honest outcome.
-	if (!cfg.fb_terminal) return false;
-
-	if (!FileExists(DEGAUSS_SCRIPT)) return false;
+	if (!degauss_installed()) return false;
 
 	taken = true;
 	snprintf(path, size, "%s", DEGAUSS_SCRIPT);
