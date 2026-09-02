@@ -20,8 +20,8 @@ read its shortcut configuration.
 
 ## Optional return shortcut
 
-Right on the System menu's **Frontend** row opens its shortcut settings.
-Both assignments default to Off.
+The System menu's **Frontend shortcut** row, directly below **Frontend**, opens
+the shortcut settings with A. Both assignments default to Off.
 
 - **Keyboard** captures one physical Linux key code. A starts capture and X
   clears it.

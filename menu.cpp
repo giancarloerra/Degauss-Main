@@ -2923,8 +2923,10 @@ void HandleUI(void)
 				if (degauss_installed())
 				{
 					MenuWrite(n++, " Frontend                  \x16", menusub == DEGAUSS_MENUSUB, 0);
+					MenuWrite(n++, " Frontend shortcut         \x16", menusub == DEGAUSS_SHORTCUT_MENUSUB, 0);
 					MenuWrite(n++);
 					menumask |= (1ULL << DEGAUSS_MENUSUB);
+					menumask |= (1ULL << DEGAUSS_SHORTCUT_MENUSUB);
 				}
 
 				MenuWrite(n++, " Core                      \x16", menusub == 0, 0);
@@ -3027,13 +3029,6 @@ void HandleUI(void)
 			fs_MenuCancel = MENU_COMMON1;
 
 			if (recent_init(-1)) menustate = MENU_RECENT1;
-			break;
-		}
-
-		if (right && menusub == DEGAUSS_MENUSUB)
-		{
-			menustate = MENU_DEGAUSS_SHORTCUT1;
-			menusub = 0;
 			break;
 		}
 
@@ -3170,6 +3165,11 @@ void HandleUI(void)
 				reboot_req = 1;
 				break;
 
+			case DEGAUSS_SHORTCUT_MENUSUB:
+				menustate = MENU_DEGAUSS_SHORTCUT1;
+				menusub = 0;
+				break;
+
 			case 17:
 				{
 					reboot_req = 1;
@@ -3286,7 +3286,7 @@ void HandleUI(void)
 			{
 				degauss_shortcut_cancel_keyboard_capture();
 				menustate = MENU_COMMON1;
-				menusub = DEGAUSS_MENUSUB;
+				menusub = DEGAUSS_SHORTCUT_MENUSUB;
 				break;
 			}
 
@@ -3300,7 +3300,7 @@ void HandleUI(void)
 				else if (select && menusub == 1)
 				{
 					menustate = MENU_COMMON1;
-					menusub = DEGAUSS_MENUSUB;
+					menusub = DEGAUSS_SHORTCUT_MENUSUB;
 				}
 				break;
 			}
@@ -3330,7 +3330,7 @@ void HandleUI(void)
 			else if (select && menusub == 2)
 			{
 				menustate = MENU_COMMON1;
-				menusub = DEGAUSS_MENUSUB;
+				menusub = DEGAUSS_SHORTCUT_MENUSUB;
 			}
 		}
 		break;
