@@ -21,15 +21,13 @@ read its shortcut configuration.
 ## Optional return shortcut
 
 The System menu's **Frontend shortcut** row, directly below **Frontend**, opens
-the shortcut settings with A. Both assignments default to Off.
+the shortcut settings with A. The keyboard assignment defaults to Off.
 
 - **Keyboard** captures one physical Linux key code. A starts capture and X
   clears it.
-- **Controller** cycles through Off and Menu plus logical A, B, X, Y, L, R,
-  Start or Select.
 - Menu or B cancels keyboard capture.
 - A malformed or unsupported record is displayed as invalid and can only be
-  replaced by explicitly resetting both assignments to Off.
+  replaced by explicitly resetting the shortcut to Off.
 
 The runtime shortcut is accepted only when all of these conditions hold:
 
@@ -38,13 +36,8 @@ The runtime shortcut is accepted only when all of these conditions hold:
 - OSD lock is unlocked.
 - No framebuffer script owns VT 2.
 - A keyboard trigger occurs while the OSD is hidden.
-- A controller trigger starts with MiSTer's existing Menu/OSD prefix while
-  the OSD is hidden.
 
-The configured keyboard make, repeat and break events are consumed. A
-controller target press and release are consumed only after the Menu prefix.
-The same controller button without that prefix follows the existing core
-path. The Menu prefix keeps its existing Main behaviour.
+The configured keyboard make, repeat and break events are consumed.
 
 Input processing records one request. `HandleUI` consumes it and loads
 `menu.rbf`; the input path never starts Degauss or loads a core directly.
@@ -57,12 +50,13 @@ The settings are stored at:
 /media/fat/config/degauss/frontend_shortcut.bin
 ```
 
-The version 1 record is a 16-byte little-endian structure containing magic,
-version, record size, keyboard key, logical controller choice, a reserved
-byte and a sentinel. A missing file means both assignments are Off. Wrong
-size, version, field range, reserved value, magic or sentinel is invalid.
-Deleting the file restores the missing-file Off default on the next Main
-start.
+The version 1 record remains a 16-byte little-endian structure containing
+magic, version, record size, keyboard key, a legacy controller byte, a reserved
+byte and a sentinel. The legacy byte keeps files written by pre-release test
+builds readable, but it is ignored and every new save writes it as zero. A
+missing file means the keyboard shortcut is Off. Wrong size, version, field
+range, reserved value, magic or sentinel is invalid. Deleting the file restores
+the missing-file Off default on the next Main start.
 
 ## Local verification
 

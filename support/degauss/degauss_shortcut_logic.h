@@ -12,19 +12,11 @@
 namespace degauss_shortcut_logic
 {
 
-enum ControllerButton : uint8_t
-{
-	CONTROLLER_OFF = 0,
-	CONTROLLER_A,
-	CONTROLLER_B,
-	CONTROLLER_X,
-	CONTROLLER_Y,
-	CONTROLLER_L,
-	CONTROLLER_R,
-	CONTROLLER_START,
-	CONTROLLER_SELECT,
-	CONTROLLER_COUNT
-};
+// Version 1 briefly exposed a controller shortcut before release. Keep its
+// byte range readable so test cards do not need their configuration deleted,
+// but every keyboard-only save writes the field back to zero.
+constexpr uint8_t LEGACY_CONTROLLER_OFF = 0;
+constexpr uint8_t LEGACY_CONTROLLER_COUNT = 9;
 
 enum ConfigLoadResult : uint8_t
 {
@@ -42,7 +34,7 @@ struct ConfigV1
 	uint16_t version;
 	uint16_t size;
 	uint16_t keyboard_key;
-	uint8_t controller_button;
+	uint8_t legacy_controller_button;
 	uint8_t reserved;
 	uint32_t sentinel;
 };
@@ -52,8 +44,8 @@ static_assert(offsetof(ConfigV1, magic) == 0, "Config magic offset changed");
 static_assert(offsetof(ConfigV1, version) == 4, "Config version offset changed");
 static_assert(offsetof(ConfigV1, size) == 6, "Config size offset changed");
 static_assert(offsetof(ConfigV1, keyboard_key) == 8, "Config key offset changed");
-static_assert(offsetof(ConfigV1, controller_button) == 10,
-	"Config controller offset changed");
+static_assert(offsetof(ConfigV1, legacy_controller_button) == 10,
+	"Config legacy controller offset changed");
 static_assert(offsetof(ConfigV1, reserved) == 11, "Config reserved offset changed");
 static_assert(offsetof(ConfigV1, sentinel) == 12, "Config sentinel offset changed");
 
@@ -62,14 +54,14 @@ constexpr uint16_t CONFIG_VERSION = 1;
 constexpr uint32_t CONFIG_SENTINEL = 0xA55A5AA5;
 constexpr uint16_t MAX_KEYBOARD_KEY = 255;
 
-inline ConfigV1 make_config(uint16_t keyboard_key, uint8_t controller_button)
+inline ConfigV1 make_config(uint16_t keyboard_key)
 {
 	return {
 		CONFIG_MAGIC,
 		CONFIG_VERSION,
 		static_cast<uint16_t>(sizeof(ConfigV1)),
 		keyboard_key,
-		controller_button,
+		LEGACY_CONTROLLER_OFF,
 		0,
 		CONFIG_SENTINEL
 	};
@@ -81,7 +73,7 @@ inline bool config_valid(const ConfigV1 &config)
 		&& config.version == CONFIG_VERSION
 		&& config.size == sizeof(ConfigV1)
 		&& config.keyboard_key <= MAX_KEYBOARD_KEY
-		&& config.controller_button < CONTROLLER_COUNT
+		&& config.legacy_controller_button < LEGACY_CONTROLLER_COUNT
 		&& config.reserved == 0
 		&& config.sentinel == CONFIG_SENTINEL;
 }
@@ -114,27 +106,6 @@ inline bool runtime_eligible(const RuntimeConditions &conditions,
 		&& conditions.osd_unlocked
 		&& !conditions.framebuffer_script
 		&& (!require_hidden_osd || !conditions.osd_visible);
-}
-
-inline uint8_t controller_button_for_code(uint16_t code,
-	const uint32_t *logical_mappings)
-{
-	static const uint8_t buttons[] = {
-		CONTROLLER_A,
-		CONTROLLER_B,
-		CONTROLLER_X,
-		CONTROLLER_Y,
-		CONTROLLER_L,
-		CONTROLLER_R,
-		CONTROLLER_SELECT,
-		CONTROLLER_START
-	};
-
-	for (uint8_t i = 0; i < sizeof(buttons) / sizeof(buttons[0]); i++)
-	{
-		if (code == (logical_mappings[i] & 0xFFFF)) return buttons[i];
-	}
-	return CONTROLLER_OFF;
 }
 
 struct RequestState
@@ -175,44 +146,6 @@ struct KeyboardRuntimeState
 		}
 
 		consumed_key = key;
-		triggered = true;
-		return true;
-	}
-};
-
-struct ControllerRuntimeState
-{
-	uint16_t consumed_code = 0;
-	bool prefix_armed = false;
-
-	void prefix_press(bool arm)
-	{
-		prefix_armed = arm;
-	}
-
-	void prefix_release()
-	{
-		prefix_armed = false;
-	}
-
-	bool target_event(uint16_t code, int value, bool target_matches,
-		bool eligible, bool &triggered)
-	{
-		triggered = false;
-
-		if (consumed_code && code == consumed_code)
-		{
-			if (!value) consumed_code = 0;
-			return true;
-		}
-
-		if (!prefix_armed || !target_matches || value != 1 || !eligible)
-		{
-			return false;
-		}
-
-		consumed_code = code;
-		prefix_armed = false;
 		triggered = true;
 		return true;
 	}

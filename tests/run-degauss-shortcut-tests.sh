@@ -37,3 +37,11 @@ test "$shortcut_row_line" -lt "$core_row_line"
 ! grep -q 'right && menusub == DEGAUSS_MENUSUB' menu.cpp
 grep -A4 'case DEGAUSS_SHORTCUT_MENUSUB:' menu.cpp \
 	| grep -q 'menustate = MENU_DEGAUSS_SHORTCUT1'
+
+# The release UI and input path are keyboard-only. Version 1 keeps a legacy
+# byte solely so files written by local pre-release builds remain readable.
+! grep -q ' Controller:' menu.cpp
+! grep -q 'degauss_shortcut_handle_controller_event' input.cpp
+grep -q 'legacy_controller_button' support/degauss/degauss_shortcut_logic.h
+grep -q ' A: Capture   X: Disable' menu.cpp
+! grep -q 'set/capture' menu.cpp

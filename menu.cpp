@@ -3251,30 +3251,27 @@ void HandleUI(void)
 				menumask = 0x3;
 				MenuWrite(n++, " Invalid shortcut config", 0, 1);
 				MenuWrite(n++);
-				MenuWrite(n++, " Reset both to Off", menusub == 0);
+				MenuWrite(n++, " Reset shortcut", menusub == 0);
 				if (degauss_shortcut_save_failed) MenuWrite(n++, " Reset failed", 0, 1);
 				while (n < OsdGetSize() - 1) MenuWrite(n++);
 				MenuWrite(n++, STD_BACK, menusub == 1, 0, OSD_ARROW_LEFT);
 			}
 			else
 			{
-				menumask = 0x7;
+				menumask = 0x3;
 				const uint16_t key = degauss_shortcut_keyboard_key();
 				if (key) snprintf(s, sizeof(s), " Keyboard: key code %u", key);
 				else snprintf(s, sizeof(s), " Keyboard: Off");
 				MenuWrite(n++, s, menusub == 0);
 
-				snprintf(s, sizeof(s), " Controller: %s",
-					degauss_shortcut_controller_name(degauss_shortcut_controller_button()));
-				MenuWrite(n++, s, menusub == 1);
 				MenuWrite(n++);
-				MenuWrite(n++, " A: set/capture   X: Off", 0, 1);
+				MenuWrite(n++, " A: Capture   X: Disable", 0, 1);
 				if (degauss_shortcut_save_failed)
 				{
 					MenuWrite(n++, " Save failed", 0, 1);
 				}
 				while (n < OsdGetSize() - 1) MenuWrite(n++);
-				MenuWrite(n++, STD_BACK, menusub == 2, 0, OSD_ARROW_LEFT);
+				MenuWrite(n++, STD_BACK, menusub == 1, 0, OSD_ARROW_LEFT);
 			}
 		}
 		break;
@@ -3282,7 +3279,7 @@ void HandleUI(void)
 	case MENU_DEGAUSS_SHORTCUT2:
 		{
 			const bool invalid = degauss_shortcut_load_state() == DEGAUSS_SHORTCUT_INVALID;
-			if (menu || back || (left && (invalid || menusub != 1)))
+			if (menu || back || left)
 			{
 				degauss_shortcut_cancel_keyboard_capture();
 				menustate = MENU_COMMON1;
@@ -3305,11 +3302,9 @@ void HandleUI(void)
 				break;
 			}
 
-			if (c == KEY_TAB && menusub <= 1)
+			if (c == KEY_TAB && menusub == 0)
 			{
-				degauss_shortcut_save_failed = menusub == 0
-					? !degauss_shortcut_set_keyboard(0)
-					: !degauss_shortcut_set_controller(degauss_shortcut_logic::CONTROLLER_OFF);
+				degauss_shortcut_save_failed = !degauss_shortcut_set_keyboard(0);
 				menustate = MENU_DEGAUSS_SHORTCUT1;
 			}
 			else if (select && menusub == 0)
@@ -3317,17 +3312,7 @@ void HandleUI(void)
 				degauss_shortcut_begin_keyboard_capture();
 				menustate = MENU_DEGAUSS_SHORTCUT_CAPTURE1;
 			}
-			else if ((select || left || right || minus || plus) && menusub == 1)
-			{
-				int button = degauss_shortcut_controller_button();
-				const int direction = (left || minus) ? -1 : 1;
-				button += direction;
-				if (button < 0) button = degauss_shortcut_logic::CONTROLLER_COUNT - 1;
-				if (button >= degauss_shortcut_logic::CONTROLLER_COUNT) button = 0;
-				degauss_shortcut_save_failed = !degauss_shortcut_set_controller(button);
-				menustate = MENU_DEGAUSS_SHORTCUT1;
-			}
-			else if (select && menusub == 2)
+			else if (select && menusub == 1)
 			{
 				menustate = MENU_COMMON1;
 				menusub = DEGAUSS_SHORTCUT_MENUSUB;

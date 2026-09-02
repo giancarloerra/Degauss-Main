@@ -46,7 +46,6 @@ bool update_advanced_state(int devnum, uint16_t evcode, int evstate);
 char joy_bnames[NUMBUTTONS][32] = {};
 int  joy_bcount = 0;
 static struct pollfd pool[NUMDEV + 3];
-static degauss_shortcut_logic::ControllerRuntimeState degauss_controller_state[NUMDEV];
 int  xbe2_shift = 0;
 
 static bool gcdb_use_usb_bcd_device(uint16_t vid, uint16_t pid)
@@ -3228,22 +3227,6 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 		osd_timer = 0;
 	}
 
-	if (!menu_event && ev->type == EV_KEY)
-	{
-		const uint8_t logical_button =
-			degauss_shortcut_logic::controller_button_for_code(ev->code,
-				&input[dev].mmap[SYS_BTN_A]);
-
-		if (degauss_shortcut_handle_controller_event(degauss_controller_state[dev],
-			ev->code, ev->value,
-			osd_event == 1, osd_event == 2, !user_io_osd_is_visible(),
-			logical_button))
-		{
-			return;
-		}
-	}
-
-
 	//mapping
 
 	if (mapping && mapping_type == 3 && ev->type == EV_KEY)
@@ -5187,7 +5170,6 @@ int input_test(int getchar)
 		}
 
 		memset(input, 0, sizeof(input));
-		for (auto &shortcut_state : degauss_controller_state) shortcut_state = {};
 
 		int n = 0;
 		DIR *d = opendir("/dev/input");
