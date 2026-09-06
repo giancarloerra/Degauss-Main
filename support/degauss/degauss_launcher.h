@@ -19,17 +19,15 @@
 // relative to the root directory.
 bool degauss_should_take_menu(char *path, int size);
 
-// Which entry of the core's System menu the Frontend item occupies.
+// Which entries of the core's System menu the Degauss items occupy.
 //
 // menumask bits are menusub values, not line positions, so an item can be
 // drawn anywhere and numbered anything free. The number still decides the
-// order the stick walks through them, and this one is deliberately ABOVE
-// every upstream entry: from Frontend, down wraps round to Core, and up
-// from Core lands back on Frontend. Numbering it just after the others
-// instead put it at the end of a walk that starts at Core, so the entry sat
-// at the top of the screen and could not be reached without pressing down
-// through the whole menu.
-#define DEGAUSS_MENUSUB 31
+// order the stick walks through them. These two are deliberately above every
+// upstream entry and consecutive: Frontend walks down to Frontend shortcut,
+// then wraps to Core. Up walks through the same visible order in reverse.
+#define DEGAUSS_MENUSUB 30
+#define DEGAUSS_SHORTCUT_MENUSUB 31
 
 // True when `path` names the frontend's own script.
 //
@@ -40,8 +38,8 @@ bool degauss_should_take_menu(char *path, int size);
 // automatic handover above, and picking it from the Scripts menu by hand.
 bool degauss_is_frontend_script(const char *path);
 
-// True when the frontend is installed, so the Frontend entry is worth
-// drawing. A card without Degauss gets the stock menu untouched.
+// True when the frontend script and framebuffer terminal are available, so
+// the Frontend entry can work. Other cards get the stock menu untouched.
 bool degauss_installed(void);
 
 #endif
