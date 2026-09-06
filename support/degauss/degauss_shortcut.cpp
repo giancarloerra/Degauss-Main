@@ -111,7 +111,7 @@ bool degauss_shortcut_set_keyboard(uint16_t key)
 {
 	ensure_loaded();
 	if (load_state == DEGAUSS_SHORTCUT_INVALID
-		|| key > degauss_shortcut_logic::MAX_KEYBOARD_KEY)
+		|| !degauss_shortcut_logic::valid_keyboard_key(key))
 	{
 		return false;
 	}

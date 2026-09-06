@@ -52,7 +52,24 @@ static_assert(offsetof(ConfigV1, sentinel) == 12, "Config sentinel offset change
 constexpr uint32_t CONFIG_MAGIC = 0x43534744; // "DGSC" on little-endian ARM
 constexpr uint16_t CONFIG_VERSION = 1;
 constexpr uint32_t CONFIG_SENTINEL = 0xA55A5AA5;
-constexpr uint16_t MAX_KEYBOARD_KEY = 255;
+// Linux input-event-codes.h defines KEY_MAX as 0x2ff. Keep the pure logic
+// header independent of Linux headers so its tests also compile on the host;
+// input.cpp asserts this value against the target toolchain's KEY_MAX.
+constexpr uint16_t MAX_KEYBOARD_KEY = 0x02ff;
+constexpr uint16_t PRIMARY_BUTTON_FIRST = 0x0100;
+constexpr uint16_t PRIMARY_BUTTON_LAST = 0x0151;
+constexpr uint16_t DPAD_BUTTON_FIRST = 0x0220;
+constexpr uint16_t DPAD_BUTTON_LAST = 0x0223;
+constexpr uint16_t TRIGGER_BUTTON_FIRST = 0x02c0;
+constexpr uint16_t TRIGGER_BUTTON_LAST = 0x02e7;
+
+inline bool valid_keyboard_key(uint16_t key)
+{
+	if (key > MAX_KEYBOARD_KEY) return false;
+	return !(key >= PRIMARY_BUTTON_FIRST && key <= PRIMARY_BUTTON_LAST)
+		&& !(key >= DPAD_BUTTON_FIRST && key <= DPAD_BUTTON_LAST)
+		&& !(key >= TRIGGER_BUTTON_FIRST && key <= TRIGGER_BUTTON_LAST);
+}
 
 inline ConfigV1 make_config(uint16_t keyboard_key)
 {
@@ -72,7 +89,7 @@ inline bool config_valid(const ConfigV1 &config)
 	return config.magic == CONFIG_MAGIC
 		&& config.version == CONFIG_VERSION
 		&& config.size == sizeof(ConfigV1)
-		&& config.keyboard_key <= MAX_KEYBOARD_KEY
+		&& valid_keyboard_key(config.keyboard_key)
 		&& config.legacy_controller_button < LEGACY_CONTROLLER_COUNT
 		&& config.reserved == 0
 		&& config.sentinel == CONFIG_SENTINEL;

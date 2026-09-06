@@ -41,6 +41,21 @@
 #define NUMDEV 30
 #define UINPUT_NAME "MiSTer virtual input"
 
+static_assert(degauss_shortcut_logic::MAX_KEYBOARD_KEY == KEY_MAX,
+	"Degauss shortcut key range must match Linux KEY_MAX");
+static_assert(degauss_shortcut_logic::PRIMARY_BUTTON_FIRST == BTN_MISC,
+	"Degauss primary-button range must match Linux BTN_MISC");
+static_assert(degauss_shortcut_logic::PRIMARY_BUTTON_LAST == BTN_GEAR_UP,
+	"Degauss primary-button range must match Linux BTN_GEAR_UP");
+static_assert(degauss_shortcut_logic::DPAD_BUTTON_FIRST == BTN_DPAD_UP,
+	"Degauss D-pad range must match Linux BTN_DPAD_UP");
+static_assert(degauss_shortcut_logic::DPAD_BUTTON_LAST == BTN_DPAD_RIGHT,
+	"Degauss D-pad range must match Linux BTN_DPAD_RIGHT");
+static_assert(degauss_shortcut_logic::TRIGGER_BUTTON_FIRST == BTN_TRIGGER_HAPPY1,
+	"Degauss trigger-button range must match Linux BTN_TRIGGER_HAPPY1");
+static_assert(degauss_shortcut_logic::TRIGGER_BUTTON_LAST == BTN_TRIGGER_HAPPY40,
+	"Degauss trigger-button range must match Linux BTN_TRIGGER_HAPPY40");
+
 bool update_advanced_state(int devnum, uint16_t evcode, int evstate);
 
 char joy_bnames[NUMBUTTONS][32] = {};
@@ -2972,12 +2987,22 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 		}
 	}
 
+	// Degauss accepts the complete Linux keyboard-key range before MiSTer's
+	// legacy 256-entry keyboard remap. Linux button ranges and keyboards that
+	// are deliberately configured as joysticks cannot become the shortcut.
+	const bool degauss_keyboard_event = ev->type == EV_KEY
+		&& ev->code
+		&& degauss_shortcut_logic::valid_keyboard_key(ev->code)
+		&& !(mapping && mapping_type == 2)
+		&& !input[dev].force_joy;
+	if (degauss_keyboard_event
+		&& degauss_shortcut_handle_keyboard_event(ev->code, ev->value, menu_event))
+	{
+		return;
+	}
+
 	if (ev->type == EV_KEY && ev->code < 256 && !(mapping && mapping_type == 2) && !input[dev].force_joy)
 	{
-		// Capture and match the physical Linux key before per-device keyboard
-		// remapping and Keyrah translation change ev->code.
-		if (degauss_shortcut_handle_keyboard_event(ev->code, ev->value, menu_event)) return;
-
 		if (!input[dev].has_kbdmap)
 		{
 			if (!FileLoadConfig(get_kbdmap_name(dev), &input[dev].kbdmap, sizeof(input[dev].kbdmap)))

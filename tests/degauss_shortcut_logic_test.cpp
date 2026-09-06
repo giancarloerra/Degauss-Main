@@ -8,6 +8,17 @@ using namespace degauss_shortcut_logic;
 
 static void test_config_validation()
 {
+	const uint16_t braille_dot_1 = 0x01f1;
+	assert(MAX_KEYBOARD_KEY == 0x02ff);
+	assert(config_valid(make_config(braille_dot_1)));
+	assert(config_valid(make_config(0x02bb)));
+	assert(!config_valid(make_config(PRIMARY_BUTTON_FIRST)));
+	assert(!config_valid(make_config(PRIMARY_BUTTON_LAST)));
+	assert(!config_valid(make_config(DPAD_BUTTON_FIRST)));
+	assert(!config_valid(make_config(DPAD_BUTTON_LAST)));
+	assert(!config_valid(make_config(TRIGGER_BUTTON_FIRST)));
+	assert(!config_valid(make_config(TRIGGER_BUTTON_LAST)));
+
 	ConfigV1 config = make_config(87);
 	assert(config_valid(config));
 
@@ -113,6 +124,16 @@ static void test_keyboard_runtime()
 	assert(!triggered);
 	assert(state.event(87, 87, 0, false, triggered));
 	assert(!state.event(87, 87, 0, true, triggered));
+
+	// Linux keyboard codes above MiSTer's legacy 256-entry keyboard map remain
+	// valid shortcut keys and retain the same make, repeat and break behavior.
+	const uint16_t braille_dot_1 = 0x01f1;
+	KeyboardRuntimeState high_key_state;
+	assert(high_key_state.event(braille_dot_1, braille_dot_1, 1, true, triggered));
+	assert(triggered);
+	assert(high_key_state.event(braille_dot_1, braille_dot_1, 2, false, triggered));
+	assert(!triggered);
+	assert(high_key_state.event(braille_dot_1, braille_dot_1, 0, false, triggered));
 }
 
 int main()
