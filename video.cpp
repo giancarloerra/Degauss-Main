@@ -3897,6 +3897,8 @@ void video_menu_bg(int n, int idle)
 		if (bg1) { imlib_context_set_image(bg1); imlib_free_image(); bg1 = 0; }
 		if (bg2) { imlib_context_set_image(bg2); imlib_free_image(); bg2 = 0; }
 		if (curtain) { imlib_context_set_image(curtain); imlib_free_image(); curtain = 0; }
+
+		if (video_fb_state()) return;
 	}
 	else
 	{
