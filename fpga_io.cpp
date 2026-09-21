@@ -52,7 +52,9 @@ static uint32_t *map_base;
 
 int fpga_has_degauss_menu()
 {
-	return access(DEGAUSS_MENU_RBF, R_OK) == 0;
+	struct stat st;
+	return stat(DEGAUSS_MENU_RBF, &st) == 0 &&
+		S_ISREG(st.st_mode) && access(DEGAUSS_MENU_RBF, R_OK) == 0;
 }
 
 /* Set CD ratio */
