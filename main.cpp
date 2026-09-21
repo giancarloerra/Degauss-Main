@@ -70,6 +70,12 @@ int main(int argc, char *argv[])
 	}
 
 	FindStorage();
+	const bool stock_menu = argc <= 1 || !strcasecmp(argv[1], "menu.rbf") ||
+		!strcasecmp(argv[1], "/media/fat/menu.rbf");
+	if (stock_menu && fpga_has_degauss_menu())
+	{
+		fpga_load_rbf("menu.rbf");
+	}
 	user_io_init((argc > 1) ? argv[1] : "",(argc > 2) ? argv[2] : NULL);
 
 #ifdef USE_SCHEDULER
