@@ -3166,22 +3166,56 @@ static uint64_t calc_frame_locked_phase(uint64_t fsc_num, uint64_t fsc_den,
 	) & 0xFFFFFFFFFFULL;
 }
 
+static bool get_scaler_yc_timing(double *pixel_clock, float *fps)
+{
+	const uint64_t htotal = (uint64_t)v_cur.param.hact + v_cur.param.hfp +
+		v_cur.param.hs + v_cur.param.hbp;
+	const uint64_t vtotal = (uint64_t)v_cur.param.vact + v_cur.param.vfp +
+		v_cur.param.vs + v_cur.param.vbp;
+	if (!htotal || !vtotal || v_cur.Fpix <= 0)
+	{
+		printf("ERROR: cannot calculate YC timing for the scaler output.\n");
+		return false;
+	}
+
+	*pixel_clock = v_cur.Fpix;
+	*fps = (float)((v_cur.Fpix * 1000000.0) / (htotal * vtotal));
+	return true;
+}
+
 static void set_yc_mode()
 {
 	// Enable YC for S-Video/CVBS modes, or subcarrier for CXA2075 encoders
 	if (cfg.vga_mode_int >= 2)
 	{
-		float fps = current_video_info.vtime ? (100000000.f / current_video_info.vtime) : 0.f;
+		double scaler_clock = 0;
+		float fps = 0;
+		const bool scaler_timing = cfg.vga_scaler || get_vga_fb();
+		if (scaler_timing && !get_scaler_yc_timing(&scaler_clock, &fps))
+		{
+			spi_uio_cmd8(UIO_SET_YC_PAR, 0);
+			return;
+		}
+		if (!scaler_timing)
+			fps = current_video_info.vtime ? (100000000.f / current_video_info.vtime) : 0.f;
 		int pal = fps < 55.f;
 		double CLK_REF = (pal || (cfg.ntsc_mode == 1)) ? 4.43361875f : (cfg.ntsc_mode == 2) ? 3.575611f : 3.579545f;
 		double CLK_VIDEO;
 
-		float prate = current_video_info.width * 100.f;
-		prate /= current_video_info.ptime;
+		float prate;
 
 		int64_t PHASE_INC;
-		if(current_video_info.frame_clocks)
+		if (scaler_timing)
 		{
+			CLK_VIDEO = scaler_clock;
+			prate = (float)CLK_VIDEO;
+			PHASE_INC = ((int64_t)((CLK_REF / CLK_VIDEO) *
+				1099511627776LL)) & 0xFFFFFFFFFFLL;
+		}
+		else if(current_video_info.frame_clocks)
+		{
+			prate = current_video_info.width * 100.f;
+			prate /= current_video_info.ptime;
 			uint32_t frame_ticks = current_video_info.vtime;
 
 			/*
@@ -3233,6 +3267,8 @@ static void set_yc_mode()
 			// Old framework and interlaced modes retain the existing path.
 			CLK_VIDEO = current_video_info.ctime * 100.f /
 				current_video_info.ptime;
+			prate = current_video_info.width * 100.f;
+			prate /= current_video_info.ptime;
 			PHASE_INC = ((int64_t)((CLK_REF / CLK_VIDEO) *
 				1099511627776LL)) & 0xFFFFFFFFFFLL;
 		}
@@ -3243,11 +3279,11 @@ static void set_yc_mode()
 
 		char yc_key[64];
 		char yc_key_expand[64];
-		sprintf(yc_key, "%s_%.1f%s%s", user_io_get_core_name(1), fps, current_video_info.interlaced ? "i" : "", (pal || !cfg.ntsc_mode) ? "" : (cfg.ntsc_mode == 1) ? "s" : "m");
+		sprintf(yc_key, "%s_%.1f%s%s", user_io_get_core_name(1), fps, (!scaler_timing && current_video_info.interlaced) ? "i" : "", (pal || !cfg.ntsc_mode) ? "" : (cfg.ntsc_mode == 1) ? "s" : "m");
 		snprintf(yc_key_expand, sizeof(yc_key_expand), "%s_%.2f", yc_key, prate);
-		printf("Calculated YC parameters for '%s': %s PHASE_INC=%lld, COLORBURST_START=%d, COLORBURST_END=%d\n", yc_key, pal ? "PAL" : (cfg.ntsc_mode == 1) ? "PAL60" : (cfg.ntsc_mode == 2) ? "PAL-M" : "NTSC", PHASE_INC, COLORBURST_START, COLORBURST_END);
+		printf("Calculated %sYC parameters for '%s': %s PHASE_INC=%lld, COLORBURST_START=%d, COLORBURST_END=%d\n", scaler_timing ? "scaler " : "", yc_key, pal ? "PAL" : (cfg.ntsc_mode == 1) ? "PAL60" : (cfg.ntsc_mode == 2) ? "PAL-M" : "NTSC", PHASE_INC, COLORBURST_START, COLORBURST_END);
 
-		for (uint i = 0; i < sizeof(yc_modes) / sizeof(yc_modes[0]); i++)
+		for (uint i = 0; !scaler_timing && i < sizeof(yc_modes) / sizeof(yc_modes[0]); i++)
 		{
 		if (!strcasecmp(yc_modes[i].key, yc_key) || !strcasecmp(yc_modes[i].key, yc_key_expand))
 			{
@@ -3537,7 +3573,11 @@ void video_fb_enable(int enable, int n)
 		}
 
 		DisableIO();
-		if (cfg.direct_video) set_vga_fb(enable);
+		if (cfg.direct_video)
+		{
+			set_vga_fb(enable);
+			set_yc_mode();
+		}
 		if (is_menu()) user_io_status_set("[8:5]", (fb_enabled && !fb_num) ? 0x160 : 0);
 	}
 }
@@ -4492,4 +4532,3 @@ int video_get_rotated()
 {
   return current_video_info.rotated;
 }
-

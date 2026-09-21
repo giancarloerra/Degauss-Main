@@ -48,6 +48,13 @@ static uint32_t *map_base;
 /* Timeout count */
 #define FPGA_TIMEOUT_CNT		0x1000000
 
+#define DEGAUSS_MENU_RBF "/media/fat/degauss/menu.rbf"
+
+int fpga_has_degauss_menu()
+{
+	return access(DEGAUSS_MENU_RBF, R_OK) == 0;
+}
+
 /* Set CD ratio */
 static void fpgamgr_set_cd_ratio(unsigned long ratio)
 {
@@ -428,6 +435,9 @@ int fpga_load_rbf(const char *name, const char *cfg, const char *xml)
 	OsdDisable();
 	static char path[1024];
 	int ret = 0;
+	const int menu_request = !strcasecmp(name, "menu.rbf");
+	const int degauss_menu = menu_request && fpga_has_degauss_menu();
+	const char *load_name = degauss_menu ? DEGAUSS_MENU_RBF : name;
 
 	if(cfg)
 	{
@@ -437,10 +447,10 @@ int fpga_load_rbf(const char *name, const char *cfg, const char *xml)
 		reboot(0);
 	}
 
-	printf("Loading RBF: %s\n", name);
+	printf("Loading RBF: %s\n", load_name);
 
-	if(name[0] == '/') strcpy(path, name);
-	else sprintf(path, "%s/%s", !strcasecmp(name, "menu.rbf") ? getStorageDir(0) : getRootDir(), name);
+	if(load_name[0] == '/') strcpy(path, load_name);
+	else sprintf(path, "%s/%s", menu_request ? getStorageDir(0) : getRootDir(), load_name);
 
 	int rbf = open(path, O_RDONLY);
 	if (rbf < 0)
@@ -503,7 +513,7 @@ int fpga_load_rbf(const char *name, const char *cfg, const char *xml)
 	}
 	close(rbf);
 
-	app_restart(!strcasecmp(name, "menu.rbf") ? "menu.rbf" : path, xml);
+	app_restart(menu_request && !degauss_menu ? "menu.rbf" : path, xml);
 	return ret;
 }
 
