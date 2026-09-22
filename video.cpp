@@ -3573,11 +3573,11 @@ void video_fb_enable(int enable, int n)
 		}
 
 		DisableIO();
-		if (cfg.direct_video) set_vga_fb(enable);
-		// The scaler has its own pixel clock and totals. Refresh Y/C after
-		// framebuffer activation so a cold boot does not keep the parameters
-		// calculated before that output path was ready.
-		if (cfg.direct_video || cfg.vga_scaler) set_yc_mode();
+		if (cfg.direct_video)
+		{
+			set_vga_fb(enable);
+			set_yc_mode();
+		}
 		if (is_menu()) user_io_status_set("[8:5]", (fb_enabled && !fb_num) ? 0x160 : 0);
 	}
 }

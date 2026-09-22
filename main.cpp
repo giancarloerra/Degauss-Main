@@ -70,7 +70,10 @@ int main(int argc, char *argv[])
 	}
 
 	FindStorage();
-	const bool stock_menu = argc <= 1 || !strcasecmp(argv[1], "menu.rbf") ||
+	// Stock Main passes an empty core path when it hands a cold boot to the
+	// configured replacement Main binary.
+	const bool stock_menu = argc <= 1 || !argv[1][0] ||
+		!strcasecmp(argv[1], "menu.rbf") ||
 		!strcasecmp(argv[1], "/media/fat/menu.rbf");
 	if (stock_menu && fpga_has_degauss_menu())
 	{
