@@ -803,10 +803,13 @@ static void loadGammaCfg()
 
 static char shadow_mask_cfg[1024] = { 0 };
 static bool has_shadow_mask = false;
+static char degauss_display_mask[129] = { 0 };
+static bool degauss_display_mask_loaded = false;
 
 #define SM_FLAG_2X      ( 1 << 1 )
 #define SM_FLAG_ROTATED ( 1 << 2 )
 #define SM_FLAG_ENABLED ( 1 << 3 )
+#define SM_FLAG_FB      ( 1 << 4 )
 
 #define SM_FLAG(v) ( ( 0x0 << 13 ) | (v) )
 #define SM_VMAX(v) ( ( 0x1 << 13 ) | (v) )
@@ -837,17 +840,21 @@ static void setShadowMask()
 	}
 
 	has_shadow_mask = 1;
-	switch (video_get_shadow_mask_mode())
+	degauss_display_mask_loaded = false;
+	switch (degauss_display_mask[0] ? SM_MODE_1X : video_get_shadow_mask_mode())
 	{
 		default: spi_w(SM_FLAG(0)); break;
-		case SM_MODE_1X: spi_w(SM_FLAG(SM_FLAG_ENABLED)); break;
+		case SM_MODE_1X: spi_w(SM_FLAG(SM_FLAG_ENABLED | (degauss_display_mask[0] ? SM_FLAG_FB : 0))); break;
 		case SM_MODE_2X: spi_w(SM_FLAG(SM_FLAG_ENABLED | SM_FLAG_2X)); break;
 		case SM_MODE_1X_ROTATED: spi_w(SM_FLAG(SM_FLAG_ENABLED | SM_FLAG_ROTATED)); break;
 		case SM_MODE_2X_ROTATED: spi_w(SM_FLAG(SM_FLAG_ENABLED | SM_FLAG_ROTATED | SM_FLAG_2X)); break;
 	}
 
 	int loaded = 0;
-	snprintf(filename, sizeof(filename), SMASK_DIR"/%s", shadow_mask_cfg + 1);
+	if (degauss_display_mask[0])
+		snprintf(filename, sizeof(filename), "Scripts/.config/degauss/masks/%s.txt", degauss_display_mask);
+	else
+		snprintf(filename, sizeof(filename), SMASK_DIR"/%s", shadow_mask_cfg + 1);
 
 	fileTextReader reader;
 	if (FileOpenTextReader(&reader, filename))
@@ -923,6 +930,7 @@ static void setShadowMask()
 	}
 
 	if (!loaded) spi_w(SM_FLAG(0));
+	if (degauss_display_mask[0]) degauss_display_mask_loaded = loaded;
 	DisableIO();
 }
 
@@ -981,6 +989,38 @@ void video_set_shadow_mask(const char *name)
 {
 	video_apply_shadow_mask(name);
 	video_save_shadow_mask_cfg();
+}
+
+bool video_set_degauss_display_mask(const char *name)
+{
+	if (!is_menu() || !video_fb_state())
+	{
+		printf("Degauss display masks require the Menu framebuffer\n");
+		return false;
+	}
+
+	if (name)
+	{
+		size_t len = strlen(name);
+		if (!len || len >= sizeof(degauss_display_mask) || strstr(name, "..") || strpbrk(name, "/\\\r\n"))
+		{
+			degauss_display_mask[0] = 0;
+			setShadowMask();
+			printf("Degauss display mask: invalid file name\n");
+			return false;
+		}
+	}
+
+	snprintf(degauss_display_mask, sizeof(degauss_display_mask), "%s", name ? name : "");
+	setShadowMask();
+	if (!has_shadow_mask || (name && !degauss_display_mask_loaded))
+	{
+		degauss_display_mask[0] = 0;
+		setShadowMask();
+		printf("Degauss display mask was not applied; effect switched off. Check Menu shadow-mask support and the mask file\n");
+		return false;
+	}
+	return true;
 }
 
 static void loadShadowMaskCfg()
@@ -2688,6 +2728,7 @@ void video_cfg_reset()
 
 void video_init()
 {
+	degauss_display_mask[0] = 0;
 	yc_parse(yc_modes, sizeof(yc_modes) / sizeof(yc_modes[0]));
 
 	fb_init();
@@ -3573,6 +3614,11 @@ void video_fb_enable(int enable, int n)
 		}
 
 		DisableIO();
+		if (!video_fb_state() && degauss_display_mask[0])
+		{
+			degauss_display_mask[0] = 0;
+			setShadowMask();
+		}
 		if (cfg.direct_video)
 		{
 			set_vga_fb(enable);

@@ -29,3 +29,21 @@ printf '%s\n' "$compact_enable" \
 if printf '%s\n' "$compact_enable" | grep -Fq 'cfg.vga_scaler)set_yc_mode();'; then
 	exit 1
 fi
+
+# Degauss uses native mask files only while its Menu framebuffer is active.
+# A malformed file switches the effect off, never restores the old effect.
+grep -Fq 'else if (!strcmp(cmd, "fb_mask off")) video_set_degauss_display_mask(nullptr);' input.cpp
+grep -Fq 'else if (!strncmp(cmd, "fb_mask ", 8)) video_set_degauss_display_mask(cmd + 8);' input.cpp
+mask_handler="$(sed -n '/^bool video_set_degauss_display_mask(/,/^}/p' video.cpp)"
+printf '%s\n' "$mask_handler" | grep -Fq 'if (!is_menu() || !video_fb_state())'
+printf '%s\n' "$mask_handler" | grep -Fq 'degauss_display_mask[0] = 0;'
+printf '%s\n' "$mask_handler" | grep -Fq 'setShadowMask();'
+invalid_name_handler="$(printf '%s\n' "$mask_handler" | sed -n '/if (!len || len >= sizeof(degauss_display_mask)/,/return false;/p')"
+printf '%s\n' "$invalid_name_handler" | grep -Fq 'degauss_display_mask[0] = 0;'
+printf '%s\n' "$invalid_name_handler" | grep -Fq 'setShadowMask();'
+if printf '%s\n' "$mask_handler" | grep -Fq 'video_save_shadow_mask_cfg'; then
+	exit 1
+fi
+grep -Fq 'Scripts/.config/degauss/masks/%s.txt' video.cpp
+grep -Fq 'SM_FLAG_ENABLED | (degauss_display_mask[0] ? SM_FLAG_FB : 0)' video.cpp
+grep -Fq 'if (!video_fb_state() && degauss_display_mask[0])' video.cpp
