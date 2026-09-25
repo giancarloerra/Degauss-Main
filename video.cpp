@@ -1004,6 +1004,8 @@ bool video_set_degauss_display_mask(const char *name)
 		size_t len = strlen(name);
 		if (!len || len >= sizeof(degauss_display_mask) || strstr(name, "..") || strpbrk(name, "/\\\r\n"))
 		{
+			degauss_display_mask[0] = 0;
+			setShadowMask();
 			printf("Degauss display mask: invalid file name\n");
 			return false;
 		}

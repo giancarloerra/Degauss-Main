@@ -38,6 +38,9 @@ mask_handler="$(sed -n '/^bool video_set_degauss_display_mask(/,/^}/p' video.cpp
 printf '%s\n' "$mask_handler" | grep -Fq 'if (!is_menu() || !video_fb_state())'
 printf '%s\n' "$mask_handler" | grep -Fq 'degauss_display_mask[0] = 0;'
 printf '%s\n' "$mask_handler" | grep -Fq 'setShadowMask();'
+invalid_name_handler="$(printf '%s\n' "$mask_handler" | sed -n '/if (!len || len >= sizeof(degauss_display_mask)/,/return false;/p')"
+printf '%s\n' "$invalid_name_handler" | grep -Fq 'degauss_display_mask[0] = 0;'
+printf '%s\n' "$invalid_name_handler" | grep -Fq 'setShadowMask();'
 if printf '%s\n' "$mask_handler" | grep -Fq 'video_save_shadow_mask_cfg'; then
 	exit 1
 fi
