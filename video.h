@@ -55,6 +55,7 @@ void  video_set_shadow_mask_mode(int n);
 char* video_get_shadow_mask(int only_name = 1);
 void  video_set_shadow_mask(const char *name);
 bool  video_set_degauss_display_mask(const char *name);
+bool  video_set_degauss_preset(const char *name, char *error, size_t error_size);
 void  video_loadPreset(char *name, bool save);
 
 int   video_get_rotated();

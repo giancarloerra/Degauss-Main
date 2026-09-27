@@ -6266,6 +6266,62 @@ int input_test(int getchar)
 					if (!strncmp(cmd, "fb_cmd", 6)) video_cmd(cmd);
 					else if (!strcmp(cmd, "fb_mask off")) video_set_degauss_display_mask(nullptr);
 					else if (!strncmp(cmd, "fb_mask ", 8)) video_set_degauss_display_mask(cmd + 8);
+					else if (!strncmp(cmd, "fb_preset ", 10))
+					{
+						char *end;
+						const unsigned long requester = strtoul(cmd + 10, &end, 10);
+						if (requester >= 100000000 && requester < 1000000000 && *end == ' ')
+						{
+							char error[256] = {};
+							const bool applied = video_set_degauss_preset(!strcmp(end + 1, "off") ? NULL : end + 1, error, sizeof(error));
+							char status[128], temporary[136];
+							snprintf(status, sizeof(status), "/tmp/degauss-preset-%lu.status", requester);
+							snprintf(temporary, sizeof(temporary), "%s.part", status);
+							int fd = open(temporary, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+							if (fd >= 0)
+							{
+								char response[300];
+								const int length = snprintf(response, sizeof(response), "%s%s\n", applied ? "ok" : "error ", applied ? "" : error);
+								const ssize_t written = write(fd, response, length);
+								const int closed = close(fd);
+								if (written == length && !closed) rename(temporary, status);
+								else unlink(temporary);
+							}
+						}
+					}
+					else if (!strncmp(cmd, "ini_profiles ", 13))
+					{
+						char *end;
+						const unsigned long requester = strtoul(cmd + 13, &end, 10);
+						if (requester >= 100000000 && requester < 1000000000 && !*end)
+						{
+							uint8_t response[256] = { (uint8_t)altcfg(), 1, 0, 4, 'M', 'a', 'i', 'n' };
+							size_t length = 8;
+							for (uint8_t slot = 1; slot <= 3; slot++)
+							{
+								const char *filename = cfg_get_name(slot);
+								if (!filename[0] || !FileExists(filename)) continue;
+								const size_t size = strlen(filename);
+								if (size > 63) continue;
+								response[length++] = slot;
+								response[length++] = (uint8_t)size;
+								memcpy(response + length, filename, size);
+								length += size;
+								response[1]++;
+							}
+							char status[128], temporary[136];
+							snprintf(status, sizeof(status), "/tmp/degauss-ini-profiles-%lu.status", requester);
+							snprintf(temporary, sizeof(temporary), "%s.part", status);
+							int fd = open(temporary, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+							if (fd >= 0)
+							{
+								const ssize_t written = write(fd, response, length);
+								const int closed = close(fd);
+								if (written == (ssize_t)length && !closed) rename(temporary, status);
+								else unlink(temporary);
+							}
+						}
+					}
 					else if (!strncmp(cmd, "video_mode ", 11)) video_mode_cmd(cmd + 11);
 					else if (!strncmp(cmd, "load_core ", 10))
 					{
