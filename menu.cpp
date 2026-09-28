@@ -879,9 +879,9 @@ const char* get_rbf_name_bootcore(char *str)
 }
 
 
-static void vga_nag()
+static void vga_nag(bool show_warning = true)
 {
-	if (video_fb_state())
+	if (show_warning && video_fb_state())
 	{
 		EnableOsd_on(OSD_VGA);
 		OsdSetSize(16);
@@ -7825,7 +7825,7 @@ void HandleUI(void)
 			degauss_running = degauss_is_frontend_script(selPath);
 			video_chvt(2);
 			video_fb_enable(1);
-			vga_nag();
+			vga_nag(!degauss_running);
 			if (degauss_running)
 			{
 				sprintf(cmd, "#!/bin/bash\nexport LC_ALL=en_US.UTF-8\nexport HOME=/root\ncd $(dirname %s)\n%s\n", path, path);

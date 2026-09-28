@@ -62,3 +62,9 @@ if grep -q 'set/capture' menu.cpp; then
 	echo "Frontend shortcut UI still uses the ambiguous set/capture label" >&2
 	exit 1
 fi
+
+# The custom Menu core supports Degauss's native analog framebuffer path.
+# Keep Main's stock vga_scaler warning for ordinary framebuffer scripts, but
+# suppress its text for Degauss while retaining the function's OSD shutdown.
+grep -A4 'degauss_running = degauss_is_frontend_script' menu.cpp \
+	| grep -q 'vga_nag(!degauss_running);'
