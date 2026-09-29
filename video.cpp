@@ -810,6 +810,10 @@ static bool has_shadow_mask = false;
 static char degauss_display_mask[129] = { 0 };
 static bool degauss_display_mask_loaded = false;
 static char degauss_mask_before_preset[129] = { 0 };
+static char degauss_gamma_before_preset[sizeof(gamma_cfg)] = { 0 };
+static ScalerFilter degauss_scaler_before_preset[4] = {};
+static VideoFilter degauss_scaler_data_before_preset[4] = {};
+static char degauss_shadow_mask_before_preset[sizeof(shadow_mask_cfg)] = { 0 };
 static bool degauss_preset_active = false;
 static bool degauss_preset_filter = false;
 
@@ -1020,6 +1024,17 @@ bool video_set_degauss_display_mask(const char *name)
 	}
 	if (degauss_preset_active)
 	{
+		if (name)
+		{
+			char path[1024];
+			snprintf(path, sizeof(path), "Scripts/.config/degauss/masks/%s.txt", name);
+			if (!FileExists(path))
+			{
+				degauss_mask_before_preset[0] = 0;
+				printf("Degauss display mask was not applied; effect switched off. Check the mask file\n");
+				return false;
+			}
+		}
 		snprintf(degauss_mask_before_preset, sizeof(degauss_mask_before_preset), "%s", name ? name : "");
 		return true;
 	}
@@ -2913,7 +2928,10 @@ static void degauss_restore_preset_baseline(bool reapply_framebuffer)
 {
 	degauss_preset_active = false;
 	degauss_preset_filter = false;
-	video_cfg_init();
+	memcpy(gamma_cfg, degauss_gamma_before_preset, sizeof(gamma_cfg));
+	memcpy(scaler_flt, degauss_scaler_before_preset, sizeof(scaler_flt));
+	memcpy(scaler_flt_data, degauss_scaler_data_before_preset, sizeof(scaler_flt_data));
+	memcpy(shadow_mask_cfg, degauss_shadow_mask_before_preset, sizeof(shadow_mask_cfg));
 	snprintf(degauss_display_mask, sizeof(degauss_display_mask), "%s", degauss_mask_before_preset);
 	setGamma();
 	setScaler();
@@ -2944,6 +2962,10 @@ bool video_set_degauss_preset(const char *name, char *error, size_t error_size)
 
 	if (degauss_preset_active) degauss_restore_preset_baseline(true);
 	snprintf(degauss_mask_before_preset, sizeof(degauss_mask_before_preset), "%s", degauss_display_mask);
+	memcpy(degauss_gamma_before_preset, gamma_cfg, sizeof(gamma_cfg));
+	memcpy(degauss_scaler_before_preset, scaler_flt, sizeof(scaler_flt));
+	memcpy(degauss_scaler_data_before_preset, scaler_flt_data, sizeof(scaler_flt_data));
+	memcpy(degauss_shadow_mask_before_preset, shadow_mask_cfg, sizeof(shadow_mask_cfg));
 	degauss_display_mask[0] = 0;
 	degauss_preset_active = true;
 	video_loadPreset(path, false);

@@ -75,3 +75,26 @@ grep -Fq 'Scripts/.config/degauss/masks/%s.txt' video.cpp
 grep -Fq 'const int fb_mask = (degauss_display_mask[0] || degauss_preset_active) ? SM_FLAG_FB : 0;' video.cpp
 grep -Fq 'case SM_MODE_1X: spi_w(SM_FLAG(SM_FLAG_ENABLED | fb_mask)); break;' video.cpp
 grep -Fq 'if (!video_fb_state() && degauss_display_mask[0])' video.cpp
+
+# A temporary Degauss preset restores the exact live Menu state rather than
+# reloading saved/default configuration and losing unsaved OSD choices.
+preset_restore="$(sed -n '/static void degauss_restore_preset_baseline/,/^}/p' video.cpp)"
+if printf '%s\n' "$preset_restore" | grep -Fq 'video_cfg_init();'; then
+	exit 1
+fi
+printf '%s\n' "$preset_restore" | grep -Fq 'memcpy(gamma_cfg, degauss_gamma_before_preset'
+printf '%s\n' "$preset_restore" | grep -Fq 'memcpy(scaler_flt, degauss_scaler_before_preset'
+printf '%s\n' "$preset_restore" | grep -Fq 'memcpy(scaler_flt_data, degauss_scaler_data_before_preset'
+printf '%s\n' "$preset_restore" | grep -Fq 'memcpy(shadow_mask_cfg, degauss_shadow_mask_before_preset'
+preset_apply="$(sed -n '/bool video_set_degauss_preset/,/^}/p' video.cpp)"
+printf '%s\n' "$preset_apply" | grep -Fq 'memcpy(degauss_gamma_before_preset, gamma_cfg'
+printf '%s\n' "$preset_apply" | grep -Fq 'memcpy(degauss_scaler_before_preset, scaler_flt'
+printf '%s\n' "$preset_apply" | grep -Fq 'memcpy(degauss_scaler_data_before_preset, scaler_flt_data'
+printf '%s\n' "$preset_apply" | grep -Fq 'memcpy(degauss_shadow_mask_before_preset, shadow_mask_cfg'
+
+# A mask selected while a full preset is active is checked before it is
+# accepted as the state to restore later. A missing file resets that state.
+deferred_mask="$(sed -n '/if (degauss_preset_active)/,/return true;/p' video.cpp | head -n 20)"
+printf '%s\n' "$deferred_mask" | grep -Fq 'Scripts/.config/degauss/masks/%s.txt'
+printf '%s\n' "$deferred_mask" | grep -Fq 'if (!FileExists(path))'
+printf '%s\n' "$deferred_mask" | grep -Fq 'degauss_mask_before_preset[0] = 0;'
