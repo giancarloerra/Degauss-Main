@@ -1292,7 +1292,7 @@ static void load_flt_pres(const char *str, int type)
 	}
 }
 
-void video_loadPreset(char *name, bool save)
+bool video_loadPreset(char *name, bool save)
 {
 	char *arg;
 	fileTextReader reader;
@@ -1300,8 +1300,9 @@ void video_loadPreset(char *name, bool save)
 	bool scaler_dirty = false;
 	bool mask_dirty = false;
 	bool gamma_dirty = false;
+	const bool opened = FileOpenTextReader(&reader, name);
 
-	if (FileOpenTextReader(&reader, name))
+	if (opened)
 	{
 		const char *line;
 		while ((line = FileReadLine(&reader)))
@@ -1372,6 +1373,7 @@ void video_loadPreset(char *name, bool save)
 		if (mask_dirty) video_save_shadow_mask_cfg();
 		if (gamma_dirty) video_save_gamma_cfg();
 	}
+	return opened;
 }
 
 static void hdmi_packet_enable(uint8_t mask, bool enable)
@@ -2968,7 +2970,12 @@ bool video_set_degauss_preset(const char *name, char *error, size_t error_size)
 	memcpy(degauss_shadow_mask_before_preset, shadow_mask_cfg, sizeof(shadow_mask_cfg));
 	degauss_display_mask[0] = 0;
 	degauss_preset_active = true;
-	video_loadPreset(path, false);
+	if (!video_loadPreset(path, false))
+	{
+		degauss_restore_preset_baseline(true);
+		snprintf(error, error_size, "Preset could not be opened");
+		return false;
+	}
 	degauss_preset_filter = scaler_flt[VFILTER_HORZ].mode || scaler_flt[VFILTER_VERT].mode ||
 		scaler_flt[VFILTER_SCAN].mode || scaler_flt[VFILTER_ILACE].mode;
 	if (video_fb_state()) video_fb_enable(1, fb_num);

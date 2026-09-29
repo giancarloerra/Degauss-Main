@@ -91,6 +91,9 @@ printf '%s\n' "$preset_apply" | grep -Fq 'memcpy(degauss_gamma_before_preset, ga
 printf '%s\n' "$preset_apply" | grep -Fq 'memcpy(degauss_scaler_before_preset, scaler_flt'
 printf '%s\n' "$preset_apply" | grep -Fq 'memcpy(degauss_scaler_data_before_preset, scaler_flt_data'
 printf '%s\n' "$preset_apply" | grep -Fq 'memcpy(degauss_shadow_mask_before_preset, shadow_mask_cfg'
+printf '%s\n' "$preset_apply" | grep -Fq 'if (!video_loadPreset(path, false))'
+printf '%s\n' "$preset_apply" | grep -Fq 'degauss_restore_preset_baseline(true);'
+printf '%s\n' "$preset_apply" | grep -Fq 'return false;'
 
 # A mask selected while a full preset is active is checked before it is
 # accepted as the state to restore later. A missing file resets that state.
