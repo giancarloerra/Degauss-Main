@@ -57,6 +57,9 @@ int main()
 		0x33333333, false));
 	assert(!degauss_cd_can_reuse_handled(0x11111111, 0x22222222,
 		0x22222222, true));
+	assert(degauss_cd_should_hold_unreadable(true, false));
+	assert(!degauss_cd_should_hold_unreadable(false, false));
+	assert(!degauss_cd_should_hold_unreadable(true, true));
 
 	assert(!strcmp(degauss_cd_provider_mgl_name(DEGAUSS_CD_PROVIDER_ANIME,
 		DEGAUSS_CD_MEGACD), "MegaCD.mgl"));

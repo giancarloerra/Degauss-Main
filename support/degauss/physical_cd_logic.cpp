@@ -75,6 +75,12 @@ bool degauss_cd_can_reuse_handled(uint32_t handled_fingerprint,
 		handled_toc_fingerprint == current_toc_fingerprint && !media_changed;
 }
 
+bool degauss_cd_should_hold_unreadable(bool handled_unreadable,
+	bool media_changed)
+{
+	return handled_unreadable && !media_changed;
+}
+
 const char *degauss_cd_provider_mgl_name(degauss_cd_provider_kind_t provider,
 	degauss_cd_disc_type_t type)
 {

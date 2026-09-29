@@ -724,6 +724,13 @@ static bool consume_detection(const cd_detection_t *result)
 
 	if (!result->readable || !result->classified || !result->fingerprint)
 	{
+		if (degauss_cd_should_hold_unreadable(
+			s_handled_fingerprint == CD_UNREADABLE_FINGERPRINT,
+			result->media_changed))
+		{
+			s_retry_count = 0;
+			return false;
+		}
 		if (s_retry_count >= 4)
 		{
 			uint32_t fingerprint = result->fingerprint ?
