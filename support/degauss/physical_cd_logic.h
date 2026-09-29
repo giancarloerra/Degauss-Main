@@ -36,6 +36,9 @@ degauss_cd_disc_type_t degauss_cd_directory_type(const uint8_t *sector,
 	size_t size);
 degauss_cd_disc_type_t degauss_cd_raw_type(const uint8_t *sectors,
 	size_t size);
+bool degauss_cd_can_reuse_handled(uint32_t handled_fingerprint,
+	uint32_t handled_toc_fingerprint, uint32_t current_toc_fingerprint,
+	bool media_changed);
 const char *degauss_cd_provider_mgl_name(degauss_cd_provider_kind_t provider,
 	degauss_cd_disc_type_t type);
 const char *degauss_cd_disc_type_name(degauss_cd_disc_type_t type);

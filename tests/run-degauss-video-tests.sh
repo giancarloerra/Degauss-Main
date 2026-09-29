@@ -75,6 +75,9 @@ grep -Fq 'Scripts/.config/degauss/masks/%s.txt' video.cpp
 grep -Fq 'const int fb_mask = (degauss_display_mask[0] || degauss_preset_active) ? SM_FLAG_FB : 0;' video.cpp
 grep -Fq 'case SM_MODE_1X: spi_w(SM_FLAG(SM_FLAG_ENABLED | fb_mask)); break;' video.cpp
 grep -Fq 'if (!video_fb_state() && degauss_display_mask[0])' video.cpp
+fb_enable="$(sed -n '/void video_fb_enable/,/^}/p' video.cpp)"
+printf '%s\n' "$fb_enable" | grep -Fq 'if (!video_fb_state() && degauss_preset_active)'
+printf '%s\n' "$fb_enable" | grep -Fq 'degauss_restore_preset_baseline(false);'
 
 # A temporary Degauss preset restores the exact live Menu state rather than
 # reloading saved/default configuration and losing unsaved OSD choices.

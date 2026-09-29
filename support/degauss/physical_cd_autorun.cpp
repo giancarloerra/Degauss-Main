@@ -59,6 +59,7 @@ typedef struct
 	bool readable;
 	bool classified;
 	uint32_t fingerprint;
+	uint32_t toc_fingerprint;
 	degauss_cd_disc_type_t type;
 } cd_detection_t;
 
@@ -66,6 +67,7 @@ typedef struct
 {
 	unsigned int generation;
 	uint32_t handled_fingerprint;
+	uint32_t handled_toc_fingerprint;
 } cd_worker_args_t;
 
 typedef struct
@@ -92,6 +94,7 @@ static bool s_result_ready = false;
 static unsigned int s_generation = 0;
 static cd_detection_t s_result;
 static uint32_t s_handled_fingerprint = 0;
+static uint32_t s_handled_toc_fingerprint = 0;
 static bool s_handled_loaded = false;
 static int s_retry_count = 0;
 static int s_absent_count = 0;
@@ -175,24 +178,34 @@ static void load_handled_fingerprint(void)
 
 	FILE *file = fopen(DEGAUSS_PHYSICAL_DISC_HANDLED_FILE, "r");
 	if (!file) return;
-	fscanf(file, "%x", &s_handled_fingerprint);
+	int fields = fscanf(file, "%x %x", &s_handled_fingerprint,
+		&s_handled_toc_fingerprint);
+	if (fields < 1) s_handled_fingerprint = 0;
+	if (fields < 2) s_handled_toc_fingerprint = 0;
 	fclose(file);
 }
 
-static bool save_handled_fingerprint(uint32_t fingerprint)
+static bool save_handled_fingerprint(uint32_t fingerprint,
+	uint32_t toc_fingerprint)
 {
 	if (!fingerprint)
 	{
 		if (unlink(DEGAUSS_PHYSICAL_DISC_HANDLED_FILE) && errno != ENOENT) return false;
 		s_handled_fingerprint = 0;
+		s_handled_toc_fingerprint = 0;
 		return true;
 	}
 
 	FILE *file = fopen(DEGAUSS_PHYSICAL_DISC_HANDLED_FILE, "w");
 	if (!file) return false;
-	bool saved = fprintf(file, "%08x\n", fingerprint) == 9;
+	bool saved = fprintf(file, "%08x %08x\n", fingerprint,
+		toc_fingerprint) == 18;
 	if (fclose(file)) saved = false;
-	if (saved) s_handled_fingerprint = fingerprint;
+	if (saved)
+	{
+		s_handled_fingerprint = fingerprint;
+		s_handled_toc_fingerprint = toc_fingerprint;
+	}
 	return saved;
 }
 
@@ -536,7 +549,7 @@ static degauss_cd_disc_type_t identify_disc(int fd, const cd_toc_t *toc,
 }
 
 static cd_detection_t detect_disc(unsigned int generation,
-	uint32_t handled_fingerprint)
+	uint32_t handled_fingerprint, uint32_t handled_toc_fingerprint)
 {
 	cd_detection_t result = {};
 	if (!detection_current(generation)) return result;
@@ -552,21 +565,24 @@ static cd_detection_t detect_disc(unsigned int generation,
 	}
 
 	int media_changed = ioctl(fd, CDROM_MEDIA_CHANGED, CDSL_CURRENT);
-	if (handled_fingerprint && media_changed == 0)
-	{
-		result.readable = true;
-		result.classified = true;
-		result.fingerprint = handled_fingerprint;
-		close(fd);
-		return result;
-	}
 	result.media_changed = handled_fingerprint && media_changed > 0;
 
 	cd_toc_t toc;
 	if (!read_toc(fd, &toc))
 	{
 		result.readable = true;
-		result.fingerprint = toc_fingerprint(&toc);
+		result.toc_fingerprint = toc_fingerprint(&toc);
+		if (degauss_cd_can_reuse_handled(handled_fingerprint,
+			handled_toc_fingerprint, result.toc_fingerprint,
+			media_changed > 0))
+		{
+			result.classified = true;
+			result.fingerprint = handled_fingerprint;
+			close(fd);
+			return result;
+		}
+
+		result.fingerprint = result.toc_fingerprint;
 		result.type = identify_disc(fd, &toc, generation,
 			&result.fingerprint, &result.classified);
 	}
@@ -580,7 +596,7 @@ static void *detection_worker(void *arg)
 	cd_worker_args_t args = *(cd_worker_args_t *)arg;
 	free(arg);
 	cd_detection_t result = detect_disc(args.generation,
-		args.handled_fingerprint);
+		args.handled_fingerprint, args.handled_toc_fingerprint);
 
 	pthread_mutex_lock(&s_lock);
 	if (s_active && args.generation == s_generation)
@@ -609,6 +625,7 @@ static void start_detection(void)
 	s_worker_running = true;
 	args->generation = s_generation;
 	args->handled_fingerprint = s_handled_fingerprint;
+	args->handled_toc_fingerprint = s_handled_toc_fingerprint;
 	pthread_mutex_unlock(&s_lock);
 
 	pthread_t worker;
@@ -678,12 +695,12 @@ static bool resolve_disc_launcher(degauss_cd_disc_type_t type, char *path,
 	return false;
 }
 
-static bool queue_handled_event(uint32_t fingerprint, const char *kind,
-	const char *value)
+static bool queue_handled_event(uint32_t fingerprint, uint32_t toc_fingerprint,
+	const char *kind, const char *value)
 {
-	if (!save_handled_fingerprint(fingerprint)) return false;
+	if (!save_handled_fingerprint(fingerprint, toc_fingerprint)) return false;
 	if (write_event(kind, value)) return true;
-	if (!save_handled_fingerprint(0))
+	if (!save_handled_fingerprint(0, 0))
 		printf("CD autorun: unable to clear handled state after event failure\n");
 	return false;
 }
@@ -695,7 +712,7 @@ static bool consume_detection(const cd_detection_t *result)
 	{
 		if (result->confirmed_absent)
 		{
-			if (++s_absent_count >= 2) save_handled_fingerprint(0);
+			if (++s_absent_count >= 2) save_handled_fingerprint(0, 0);
 		}
 		else s_absent_count = 0;
 		s_retry_count = 0;
@@ -703,7 +720,7 @@ static bool consume_detection(const cd_detection_t *result)
 	}
 
 	s_absent_count = 0;
-	if (result->media_changed) save_handled_fingerprint(0);
+	if (result->media_changed) save_handled_fingerprint(0, 0);
 
 	if (!result->readable || !result->classified || !result->fingerprint)
 	{
@@ -711,7 +728,7 @@ static bool consume_detection(const cd_detection_t *result)
 		{
 			uint32_t fingerprint = result->fingerprint ?
 				result->fingerprint : CD_UNREADABLE_FINGERPRINT;
-			save_handled_fingerprint(fingerprint);
+			save_handled_fingerprint(fingerprint, result->toc_fingerprint);
 			s_retry_count = 0;
 			printf("CD autorun: disc could not be identified; waiting for media change\n");
 			return false;
@@ -724,10 +741,17 @@ static bool consume_detection(const cd_detection_t *result)
 	}
 
 	s_retry_count = 0;
-	if (result->fingerprint == s_handled_fingerprint) return false;
+	if (result->fingerprint == s_handled_fingerprint)
+	{
+		if (result->toc_fingerprint != s_handled_toc_fingerprint)
+			save_handled_fingerprint(result->fingerprint,
+				result->toc_fingerprint);
+		return false;
+	}
 	if (result->type == DEGAUSS_CD_AUDIO || result->type == DEGAUSS_CD_UNKNOWN)
 	{
-		save_handled_fingerprint(result->fingerprint);
+		save_handled_fingerprint(result->fingerprint,
+			result->toc_fingerprint);
 		printf("CD autorun: ignoring %s\n", degauss_cd_disc_type_name(result->type));
 		return false;
 	}
@@ -755,12 +779,14 @@ static bool consume_detection(const cd_detection_t *result)
 				"The installed physical CD provider has no %s launcher.",
 				degauss_cd_disc_type_name(result->type));
 		}
-		if (!queue_handled_event(result->fingerprint, "error", message))
+		if (!queue_handled_event(result->fingerprint,
+			result->toc_fingerprint, "error", message))
 			printf("CD autorun: unable to report provider error\n");
 		return false;
 	}
 
-	if (!queue_handled_event(result->fingerprint, "launch", path))
+	if (!queue_handled_event(result->fingerprint,
+		result->toc_fingerprint, "launch", path))
 	{
 		printf("CD autorun: unable to queue launch for %s\n", path);
 		write_event("error", "Physical disc launch could not be prepared.");

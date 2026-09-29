@@ -49,6 +49,14 @@ int main()
 	assert(degauss_cd_initial_type(true, false) == DEGAUSS_CD_NONE);
 	assert(degauss_cd_final_type(true) == DEGAUSS_CD_SNES_MSU1);
 	assert(degauss_cd_final_type(false) == DEGAUSS_CD_UNKNOWN);
+	assert(degauss_cd_can_reuse_handled(0x11111111, 0x22222222,
+		0x22222222, false));
+	assert(!degauss_cd_can_reuse_handled(0x11111111, 0,
+		0x22222222, false));
+	assert(!degauss_cd_can_reuse_handled(0x11111111, 0x22222222,
+		0x33333333, false));
+	assert(!degauss_cd_can_reuse_handled(0x11111111, 0x22222222,
+		0x22222222, true));
 
 	assert(!strcmp(degauss_cd_provider_mgl_name(DEGAUSS_CD_PROVIDER_ANIME,
 		DEGAUSS_CD_MEGACD), "MegaCD.mgl"));

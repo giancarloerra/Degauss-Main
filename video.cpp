@@ -3825,7 +3825,6 @@ static bool video_degauss_native_fb_active()
 void video_fb_enable(int enable, int n)
 {
 	PROFILE_FUNCTION();
-	if (!enable && degauss_preset_active) degauss_restore_preset_baseline(false);
 
 	if (fb_base)
 	{
@@ -3890,6 +3889,8 @@ void video_fb_enable(int enable, int n)
 		}
 
 		DisableIO();
+		if (!video_fb_state() && degauss_preset_active)
+			degauss_restore_preset_baseline(false);
 		if (!video_fb_state() && degauss_display_mask[0])
 		{
 			degauss_display_mask[0] = 0;
