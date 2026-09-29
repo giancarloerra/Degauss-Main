@@ -52,6 +52,7 @@
 #define FB_FMT_RxB  0b10000
 #define FB_EN       0x8000
 #define FB_FILTER   0x4000
+#define FB_NATIVE   0x2000
 
 #define FB_DV_LBRD  3
 #define FB_DV_RBRD  6
@@ -77,6 +78,7 @@ static int fb_enabled = 0;
 static int fb_width = 0;
 static int fb_height = 0;
 static int fb_num = 0;
+static bool degauss_native_fb = false;
 static int brd_x = 0;
 static int brd_y = 0;
 
@@ -3786,6 +3788,11 @@ static void fb_write_module_params()
 	});
 }
 
+static bool video_degauss_native_fb_active()
+{
+	return degauss_native_fb && is_menu() && !cfg.vga_scaler;
+}
+
 void video_fb_enable(int enable, int n)
 {
 	PROFILE_FUNCTION();
@@ -3815,7 +3822,8 @@ void video_fb_enable(int enable, int n)
 				}
 
 				//printf("Switch to Linux frame buffer\n");
-				spi_w((uint16_t)(FB_EN | (degauss_preset_filter ? FB_FILTER : 0) | FB_FMT_RxB | FB_FMT_8888)); // format, enable flag
+				spi_w((uint16_t)(FB_EN | (degauss_preset_filter ? FB_FILTER : 0) |
+					(video_degauss_native_fb_active() ? FB_NATIVE : 0) | FB_FMT_RxB | FB_FMT_8888)); // format, enable flag
 				spi_w((uint16_t)fb_addr); // base address low word
 				spi_w(fb_addr >> 16);     // base address high word
 				spi_w(fb_width);          // frame width
@@ -3881,6 +3889,7 @@ int video_fb_state()
 static void video_fb_config()
 {
 	PROFILE_FUNCTION();
+	static_assert(FB_SIZE >= 352 * 288, "Degauss native framebuffer must fit");
 
 	int fb_scale = cfg.fb_size;
 
@@ -3894,18 +3903,36 @@ static void video_fb_config()
 	else if (fb_scale == 3) fb_scale = 2;
 	else if (fb_scale > 4) fb_scale = 4;
 
-	const int fb_scale_x = fb_scale;
-	const int fb_scale_y = v_cur.param.pr == 0 ? fb_scale : fb_scale * 2;
+	if (video_degauss_native_fb_active())
+	{
+		fb_width = 352;
+		fb_height = cfg.menu_pal ? 288 : 240;
+		brd_x = 0;
+		brd_y = 0;
+	}
+	else
+	{
+		const int fb_scale_x = fb_scale * cfg.fb_hscale;
+		const int fb_scale_y = v_cur.param.pr == 0 ? fb_scale : fb_scale * 2;
 
-	fb_width = v_cur.item[1] / fb_scale_x;
-	fb_height = v_cur.item[5] / fb_scale_y;
+		fb_width = v_cur.item[1] / fb_scale_x;
+		fb_height = v_cur.item[5] / fb_scale_y;
 
-	brd_x = cfg.vscale_border / fb_scale_x;
-	brd_y = cfg.vscale_border / fb_scale_y;
+		brd_x = cfg.vscale_border / fb_scale_x;
+		brd_y = cfg.vscale_border / fb_scale_y;
+	}
 
 	if (fb_enabled) video_fb_enable(1, fb_num);
 
 	fb_write_module_params();
+}
+
+void video_set_degauss_native_fb(bool enable)
+{
+	enable = enable && cfg.degauss_native_analog;
+	if (degauss_native_fb == enable) return;
+	degauss_native_fb = enable;
+	video_fb_config();
 }
 
 static void draw_checkers()

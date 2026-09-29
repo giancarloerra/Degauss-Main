@@ -30,6 +30,29 @@ if printf '%s\n' "$compact_enable" | grep -Fq 'cfg.vga_scaler)set_yc_mode();'; t
 	exit 1
 fi
 
+# fb_hscale changes only the Linux framebuffer's horizontal divisor. Its
+# default preserves the released geometry; vertical scaling and output timing
+# remain controlled by their existing paths.
+grep -Fq 'uint8_t fb_hscale;' cfg.h
+grep -Fq '{ "FB_HSCALE", (void*)(&(cfg.fb_hscale)), UINT8, 1, 4 },' cfg.cpp
+grep -Fq 'cfg.fb_hscale = 1;' cfg.cpp
+grep -Fq 'const int fb_scale_x = fb_scale * cfg.fb_hscale;' video.cpp
+grep -Fq 'const int fb_scale_y = v_cur.param.pr == 0 ? fb_scale : fb_scale * 2;' video.cpp
+grep -Fq 'fb_width = v_cur.item[1] / fb_scale_x;' video.cpp
+grep -Fq 'fb_height = v_cur.item[5] / fb_scale_y;' video.cpp
+
+# Native CRT plus independently timed HDMI is opt-in. The default keeps the
+# released framebuffer path, while the enabled Degauss path uses a native-size
+# source and explicitly asks the paired Menu core for native analog output.
+grep -Fq 'uint8_t degauss_native_analog;' cfg.h
+grep -Fq '{ "DEGAUSS_NATIVE_ANALOG", (void*)(&(cfg.degauss_native_analog)), UINT8, 0, 1 },' cfg.cpp
+grep -Fq '#define FB_NATIVE   0x2000' video.cpp
+grep -Fq 'return degauss_native_fb && is_menu() && !cfg.vga_scaler;' video.cpp
+grep -Fq 'enable = enable && cfg.degauss_native_analog;' video.cpp
+grep -Fq '(video_degauss_native_fb_active() ? FB_NATIVE : 0)' video.cpp
+grep -Fq 'fb_width = 352;' video.cpp
+grep -Fq 'fb_height = cfg.menu_pal ? 288 : 240;' video.cpp
+
 # Degauss uses native mask files only while its Menu framebuffer is active.
 # A malformed file switches the effect off, never restores the old effect.
 grep -Fq 'else if (!strcmp(cmd, "fb_mask off")) video_set_degauss_display_mask(nullptr);' input.cpp
@@ -45,5 +68,6 @@ if printf '%s\n' "$mask_handler" | grep -Fq 'video_save_shadow_mask_cfg'; then
 	exit 1
 fi
 grep -Fq 'Scripts/.config/degauss/masks/%s.txt' video.cpp
-grep -Fq 'SM_FLAG_ENABLED | (degauss_display_mask[0] ? SM_FLAG_FB : 0)' video.cpp
+grep -Fq 'const int fb_mask = (degauss_display_mask[0] || degauss_preset_active) ? SM_FLAG_FB : 0;' video.cpp
+grep -Fq 'case SM_MODE_1X: spi_w(SM_FLAG(SM_FLAG_ENABLED | fb_mask)); break;' video.cpp
 grep -Fq 'if (!video_fb_state() && degauss_display_mask[0])' video.cpp

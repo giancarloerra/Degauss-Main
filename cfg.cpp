@@ -69,6 +69,8 @@ static const ini_var_t ini_vars[] =
 	{ "BOOTCORE_TIMEOUT", (void*)(&(cfg.bootcore_timeout)), INT16, 2, 30 },
 	{ "FONT", (void*)(&(cfg.font)), STRING, 0, sizeof(cfg.font) - 1 },
 	{ "FB_SIZE", (void*)(&(cfg.fb_size)), UINT8, 0, 4 },
+	{ "FB_HSCALE", (void*)(&(cfg.fb_hscale)), UINT8, 1, 4 },
+	{ "DEGAUSS_NATIVE_ANALOG", (void*)(&(cfg.degauss_native_analog)), UINT8, 0, 1 },
 	{ "FB_TERMINAL", (void*)(&(cfg.fb_terminal)), UINT8, 0, 1 },
 	{ "OSD_TIMEOUT", (void*)(&(cfg.osd_timeout)), INT16, 0, 3600 },
 	{ "DIRECT_VIDEO", (void*)(&(cfg.direct_video)), UINT8, 0, 2 },
@@ -595,6 +597,7 @@ void cfg_parse()
 	memset(&cfg, 0, sizeof(cfg));
 	cfg.csync = 1;
 	cfg.bootscreen = 1;
+	cfg.fb_hscale = 1;
 	cfg.fb_terminal = 1;
 	cfg.controller_info = 6;
 	cfg.browse_expand = 1;

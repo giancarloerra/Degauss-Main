@@ -7823,6 +7823,7 @@ void HandleUI(void)
 			// reads. Remembered here because the state that ends the run
 			// no longer knows which path started it.
 			degauss_running = degauss_is_frontend_script(selPath);
+			video_set_degauss_native_fb(degauss_running);
 			video_chvt(2);
 			video_fb_enable(1);
 			vga_nag(!degauss_running);
@@ -7872,6 +7873,7 @@ void HandleUI(void)
 				if (degauss_running)
 				{
 					degauss_running = false;
+					video_set_degauss_native_fb(false);
 					video_menu_bg(user_io_status_get("[3:1]"));
 					video_fb_enable(0);
 					menustate = MENU_SYSTEM1;
