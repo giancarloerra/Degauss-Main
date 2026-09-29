@@ -17,6 +17,8 @@ grep -q 'pthread_create' support/degauss/physical_cd_autorun.cpp
 grep -q 'detection_current(generation)' support/degauss/physical_cd_autorun.cpp
 grep -q 'DEGAUSS_PHYSICAL_DISC_CONTROL_FILE' support/degauss/physical_cd_autorun.cpp
 grep -q 'DEGAUSS_PHYSICAL_DISC_EVENT_FILE' support/degauss/physical_cd_autorun.cpp
+grep -q 'access(DEGAUSS_PHYSICAL_DISC_EVENT_FILE, F_OK) != 0' support/degauss/physical_cd_autorun.cpp
+grep -q 'GetTimer(CD_POLL_MS \* 4)' support/degauss/physical_cd_autorun.cpp
 if grep -q 'xml_load' support/degauss/physical_cd_autorun.cpp; then
 	echo "Physical-disc detection bypasses the Degauss launch handoff" >&2
 	exit 1

@@ -796,7 +796,9 @@ static bool consume_detection(const cd_detection_t *result)
 		result->toc_fingerprint, "launch", path))
 	{
 		printf("CD autorun: unable to queue launch for %s\n", path);
-		write_event("error", "Physical disc launch could not be prepared.");
+		if (access(DEGAUSS_PHYSICAL_DISC_EVENT_FILE, F_OK) != 0)
+			write_event("error", "Physical disc launch could not be prepared.");
+		s_poll_timer = GetTimer(CD_POLL_MS * 4);
 		return true;
 	}
 
