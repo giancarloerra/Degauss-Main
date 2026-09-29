@@ -25,6 +25,11 @@ grep -B8 'degauss_shortcut_handle_keyboard_event' input.cpp | grep -q 'valid_key
 grep -B8 'degauss_shortcut_handle_keyboard_event' input.cpp | grep -q '!input\[dev\]\.force_joy'
 grep -q 'uint8_t  kbdmap\[256\]' input.cpp
 
+# The Enter release that opened capture must reach Main's ordinary keyboard
+# path, otherwise the next Enter press remains latched and is ignored.
+capture_handler="$(sed -n '/bool degauss_shortcut_handle_keyboard_event/,/^}/p' support/degauss/degauss_shortcut.cpp)"
+printf '%s\n' "$capture_handler" | grep -Fq 'if (!value) return false;'
+
 # The two Degauss rows must follow their visible order when Up or Down changes
 # menusub. They stay above every stock System-menu index, with no controller
 # direction required to open the shortcut settings.
