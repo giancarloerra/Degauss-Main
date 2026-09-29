@@ -437,9 +437,11 @@ int fpga_load_rbf(const char *name, const char *cfg, const char *xml)
 	OsdDisable();
 	static char path[1024];
 	int ret = 0;
-	const int menu_request = !strcasecmp(name, "menu.rbf");
+	const int degauss_cold_boot = !strcmp(name, DEGAUSS_COLD_BOOT_MARKER);
+	const int menu_request = degauss_cold_boot || !strcasecmp(name, "menu.rbf");
 	const int degauss_menu = menu_request && fpga_has_degauss_menu();
-	const char *load_name = degauss_menu ? DEGAUSS_MENU_RBF : name;
+	const char *load_name = degauss_menu ? DEGAUSS_MENU_RBF :
+		(degauss_cold_boot ? "menu.rbf" : name);
 
 	if(cfg)
 	{
@@ -515,7 +517,8 @@ int fpga_load_rbf(const char *name, const char *cfg, const char *xml)
 	}
 	close(rbf);
 
-	app_restart(menu_request && !degauss_menu ? "menu.rbf" : path, xml);
+	app_restart(degauss_cold_boot && degauss_menu ? DEGAUSS_COLD_BOOT_MARKER :
+		(menu_request && !degauss_menu ? "menu.rbf" : path), xml);
 	return ret;
 }
 

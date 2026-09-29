@@ -12,7 +12,11 @@ compact_startup="$(printf '%s\n' "$main_startup" | tr -d '[:space:]')"
 printf '%s\n' "$compact_startup" \
 	| grep -Fq 'argc<=1||!argv[1][0]||!strcasecmp(argv[1],"menu.rbf")'
 printf '%s\n' "$compact_startup" \
-	| grep -Fq 'if(stock_menu&&fpga_has_degauss_menu()){fpga_load_rbf("menu.rbf");}'
+	| grep -Fq 'if(stock_menu&&fpga_has_degauss_menu()){fpga_load_rbf(DEGAUSS_COLD_BOOT_MARKER);}'
+printf '%s\n' "$compact_startup" \
+	| grep -Fq 'user_io_init(degauss_cold_boot?"":((argc>1)?argv[1]:""),'
+grep -Fq '#define DEGAUSS_COLD_BOOT_MARKER "@degauss-cold-boot"' fpga_io.h
+grep -Fq 'degauss_cold_boot && degauss_menu ? DEGAUSS_COLD_BOOT_MARKER' fpga_io.cpp
 
 framebuffer_enable="$(awk '
   /^void video_fb_enable\(/ { capture = 1 }

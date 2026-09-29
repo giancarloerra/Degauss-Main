@@ -72,14 +72,17 @@ int main(int argc, char *argv[])
 	FindStorage();
 	// Stock Main passes an empty core path when it hands a cold boot to the
 	// configured replacement Main binary.
-	const bool stock_menu = argc <= 1 || !argv[1][0] ||
+	const bool degauss_cold_boot = argc > 1 &&
+		!strcmp(argv[1], DEGAUSS_COLD_BOOT_MARKER);
+	const bool stock_menu = !degauss_cold_boot && (argc <= 1 || !argv[1][0] ||
 		!strcasecmp(argv[1], "menu.rbf") ||
-		!strcasecmp(argv[1], "/media/fat/menu.rbf");
+		!strcasecmp(argv[1], "/media/fat/menu.rbf"));
 	if (stock_menu && fpga_has_degauss_menu())
 	{
-		fpga_load_rbf("menu.rbf");
+		fpga_load_rbf(DEGAUSS_COLD_BOOT_MARKER);
 	}
-	user_io_init((argc > 1) ? argv[1] : "",(argc > 2) ? argv[2] : NULL);
+	user_io_init(degauss_cold_boot ? "" : ((argc > 1) ? argv[1] : ""),
+		(argc > 2) ? argv[2] : NULL);
 
 #ifdef USE_SCHEDULER
 	scheduler_init();
