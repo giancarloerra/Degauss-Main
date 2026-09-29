@@ -68,3 +68,11 @@ fi
 # suppress its text for Degauss while retaining the function's OSD shutdown.
 grep -A4 'degauss_running = degauss_is_frontend_script' menu.cpp \
 	| grep -q 'vga_nag(!degauss_running);'
+
+# A failed terminal fork must restore the Menu framebuffer immediately rather
+# than treating pid -1 as a running child and leaving Degauss video active.
+degauss_launch="$(sed -n '/degauss_running = degauss_is_frontend_script/,/case MENU_SCRIPTS_FB2:/p' menu.cpp)"
+printf '%s\n' "$degauss_launch" | grep -q 'if (ttypid < 0)'
+printf '%s\n' "$degauss_launch" | grep -q 'video_set_degauss_native_fb(false);'
+printf '%s\n' "$degauss_launch" | grep -q 'video_fb_enable(0);'
+printf '%s\n' "$degauss_launch" | grep -q 'menustate = MENU_SYSTEM1;'

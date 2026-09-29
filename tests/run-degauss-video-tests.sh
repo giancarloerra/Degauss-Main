@@ -53,6 +53,10 @@ grep -Fq '(video_degauss_native_fb_active() ? FB_NATIVE : 0)' video.cpp
 grep -Fq 'fb_width = 352;' video.cpp
 grep -Fq 'fb_height = cfg.menu_pal ? 288 : 240;' video.cpp
 
+# Very narrow test modes still need a non-zero checker size before the
+# framebuffer diagnostic divides coordinates by it.
+grep -A8 'static void draw_checkers()' video.cpp | grep -Fq 'if (!sz) sz = 1;'
+
 # Degauss uses native mask files only while its Menu framebuffer is active.
 # A malformed file switches the effect off, never restores the old effect.
 grep -Fq 'else if (!strcmp(cmd, "fb_mask off")) video_set_degauss_display_mask(nullptr);' input.cpp

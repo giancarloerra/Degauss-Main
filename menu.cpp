@@ -7840,7 +7840,20 @@ void HandleUI(void)
 			FileSave("/tmp/script", cmd, strlen(cmd));
 			ttystatus = 0;
 			ttypid = fork();
-			if (!ttypid)
+			if (ttypid < 0)
+			{
+				perror("fork");
+				ttypid = 0;
+				degauss_running = false;
+				video_set_degauss_native_fb(false);
+				video_menu_bg(user_io_status_get("[3:1]"));
+				video_fb_enable(0);
+				menustate = MENU_SYSTEM1;
+				menusub = 3;
+				OsdClear();
+				OsdEnable(DISABLE_KEYBOARD);
+			}
+			else if (!ttypid)
 			{
 				if (degauss_running)
 				{

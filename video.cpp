@@ -3942,6 +3942,7 @@ static void draw_checkers()
 	uint32_t col1 = 0x888888;
 	uint32_t col2 = 0x666666;
 	int sz = fb_width / 128;
+	if (!sz) sz = 1;
 
 	for (int y = brd_y; y < fb_height - brd_y; y++)
 	{
