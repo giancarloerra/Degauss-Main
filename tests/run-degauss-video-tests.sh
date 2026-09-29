@@ -90,6 +90,7 @@ if printf '%s\n' "$preset_restore" | grep -Fq 'video_cfg_init();'; then
 	exit 1
 fi
 printf '%s\n' "$preset_restore" | grep -Fq 'memcpy(gamma_cfg, degauss_gamma_before_preset'
+printf '%s\n' "$preset_restore" | grep -Fq 'if (has_gamma) spi_uio_cmd8(UIO_SET_GAMMA, gamma_cfg[0]);'
 printf '%s\n' "$preset_restore" | grep -Fq 'memcpy(scaler_flt, degauss_scaler_before_preset'
 printf '%s\n' "$preset_restore" | grep -Fq 'memcpy(scaler_flt_data, degauss_scaler_data_before_preset'
 printf '%s\n' "$preset_restore" | grep -Fq 'memcpy(shadow_mask_cfg, degauss_shadow_mask_before_preset'

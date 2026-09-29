@@ -2936,6 +2936,7 @@ static void degauss_restore_preset_baseline(bool reapply_framebuffer)
 	memcpy(shadow_mask_cfg, degauss_shadow_mask_before_preset, sizeof(shadow_mask_cfg));
 	snprintf(degauss_display_mask, sizeof(degauss_display_mask), "%s", degauss_mask_before_preset);
 	setGamma();
+	if (has_gamma) spi_uio_cmd8(UIO_SET_GAMMA, gamma_cfg[0]);
 	setScaler();
 	setShadowMask();
 	if (reapply_framebuffer && video_fb_state()) video_fb_enable(1, fb_num);
