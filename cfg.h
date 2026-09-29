@@ -40,6 +40,8 @@ typedef struct {
 	uint8_t menu_pal;
 	int16_t bootcore_timeout;
 	uint8_t fb_size;
+	uint8_t fb_hscale;
+	uint8_t degauss_native_analog;
 	uint8_t fb_terminal;
 	uint8_t osd_rotate;
 	uint16_t osd_timeout;
@@ -79,6 +81,7 @@ typedef struct {
 	char preset_default[1023];
 	char player_controller[6][8][256];
 	char controller_deadzone[32][256];
+	uint8_t dpad_threshold;
 	uint8_t rumble;
 	uint8_t wheel_force;
 	uint16_t wheel_range;

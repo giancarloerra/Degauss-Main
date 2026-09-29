@@ -2774,11 +2774,12 @@ static void update_num_hw(int dev, int num)
 			led_path = get_led_path(dev);
 			if (led_path)
 			{
-				set_led(led_path, ":home", num ? 1 : 15);
-				set_led(led_path, ":player1", (num == 0 || num == 1 || num == 5));
-				set_led(led_path, ":player2", (num == 0 || num == 2 || num == 6));
-				set_led(led_path, ":player3", (num == 0 || num == 3));
-				set_led(led_path, ":player4", (num == 0 || num == 4 || num == 5 || num == 6));
+				// 5.15 names first, then the mainline hid-nintendo names used by 6.18
+				if (!set_led(led_path, ":home", num ? 1 : 15)) set_led(led_path, ":blue:player-5", num ? 1 : 15);
+				if (!set_led(led_path, ":player1", (num == 0 || num == 1 || num == 5))) set_led(led_path, ":green:player-1", (num == 0 || num == 1 || num == 5));
+				if (!set_led(led_path, ":player2", (num == 0 || num == 2 || num == 6))) set_led(led_path, ":green:player-2", (num == 0 || num == 2 || num == 6));
+				if (!set_led(led_path, ":player3", (num == 0 || num == 3))) set_led(led_path, ":green:player-3", (num == 0 || num == 3));
+				if (!set_led(led_path, ":player4", (num == 0 || num == 4 || num == 5 || num == 6))) set_led(led_path, ":green:player-4", (num == 0 || num == 4 || num == 5 || num == 6));
 			}
 
 			if (repeat && JOYCON_COMBINED(dev)) dev = input[dev].bind; else break;
@@ -5348,7 +5349,7 @@ int input_test(int getchar)
 
 						if (input[n].vid == 0x057e)
 						{
-							if (strstr(input[n].name, " IMU"))
+							if (strstr(input[n].name, " IMU") || strstr(input[n].name, "(IMU)"))
 							{
 								// don't use Accelerometer
 								close(pool[n].fd);
@@ -6124,7 +6125,7 @@ int input_test(int getchar)
 										pai = &absinfo;
 										int range = absinfo.maximum - absinfo.minimum + 1;
 										int center = absinfo.minimum + (range / 2);
-										int treshold = range / 4;
+										int treshold = (range * cfg.dpad_threshold) / 200;
 
 										int only_max = 1;
 										for (int n = 0; n < 4; n++) if (input[dev].mmap[SYS_AXIS1_X + n] && ((input[dev].mmap[SYS_AXIS1_X + n] & 0xFFFF) == ev.code)) only_max = 0;
@@ -6265,6 +6266,62 @@ int input_test(int getchar)
 					if (!strncmp(cmd, "fb_cmd", 6)) video_cmd(cmd);
 					else if (!strcmp(cmd, "fb_mask off")) video_set_degauss_display_mask(nullptr);
 					else if (!strncmp(cmd, "fb_mask ", 8)) video_set_degauss_display_mask(cmd + 8);
+					else if (!strncmp(cmd, "fb_preset ", 10))
+					{
+						char *end;
+						const unsigned long requester = strtoul(cmd + 10, &end, 10);
+						if (requester >= 100000000 && requester < 1000000000 && *end == ' ')
+						{
+							char error[256] = {};
+							const bool applied = video_set_degauss_preset(!strcmp(end + 1, "off") ? NULL : end + 1, error, sizeof(error));
+							char status[128], temporary[136];
+							snprintf(status, sizeof(status), "/tmp/degauss-preset-%lu.status", requester);
+							snprintf(temporary, sizeof(temporary), "%s.part", status);
+							int fd = open(temporary, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+							if (fd >= 0)
+							{
+								char response[300];
+								const int length = snprintf(response, sizeof(response), "%s%s\n", applied ? "ok" : "error ", applied ? "" : error);
+								const ssize_t written = write(fd, response, length);
+								const int closed = close(fd);
+								if (written == length && !closed) rename(temporary, status);
+								else unlink(temporary);
+							}
+						}
+					}
+					else if (!strncmp(cmd, "ini_profiles ", 13))
+					{
+						char *end;
+						const unsigned long requester = strtoul(cmd + 13, &end, 10);
+						if (requester >= 100000000 && requester < 1000000000 && !*end)
+						{
+							uint8_t response[256] = { (uint8_t)altcfg(), 1, 0, 4, 'M', 'a', 'i', 'n' };
+							size_t length = 8;
+							for (uint8_t slot = 1; slot <= 3; slot++)
+							{
+								const char *filename = cfg_get_name(slot);
+								if (!filename[0] || !FileExists(filename)) continue;
+								const size_t size = strlen(filename);
+								if (size > 63) continue;
+								response[length++] = slot;
+								response[length++] = (uint8_t)size;
+								memcpy(response + length, filename, size);
+								length += size;
+								response[1]++;
+							}
+							char status[128], temporary[136];
+							snprintf(status, sizeof(status), "/tmp/degauss-ini-profiles-%lu.status", requester);
+							snprintf(temporary, sizeof(temporary), "%s.part", status);
+							int fd = open(temporary, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+							if (fd >= 0)
+							{
+								const ssize_t written = write(fd, response, length);
+								const int closed = close(fd);
+								if (written == (ssize_t)length && !closed) rename(temporary, status);
+								else unlink(temporary);
+							}
+						}
+					}
 					else if (!strncmp(cmd, "video_mode ", 11)) video_mode_cmd(cmd + 11);
 					else if (!strncmp(cmd, "load_core ", 10))
 					{

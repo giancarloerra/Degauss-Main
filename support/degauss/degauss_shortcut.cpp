@@ -152,6 +152,7 @@ bool degauss_shortcut_handle_keyboard_event(uint16_t key, int value, bool menu_e
 
 	if (!menu_event && capture_active)
 	{
+		if (!value) return false;
 		if (value == 1 && key)
 		{
 			capture_active = false;

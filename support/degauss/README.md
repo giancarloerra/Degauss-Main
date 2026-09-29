@@ -12,7 +12,7 @@ read its shortcut configuration.
   `Scripts/degauss.sh` once per Main process.
 - The System menu contains **Frontend** when `fb_terminal=1` and that script
   exists.
-- A on **Frontend** loads `menu.rbf`. Main then restarts and uses the same
+- Selecting **Frontend** loads `menu.rbf`. Main then restarts and uses the same
   handoff path.
 - Starting `degauss.sh` from the Scripts menu uses the same framebuffer
   execution path without the console banner or final key prompt.

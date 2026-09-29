@@ -4,6 +4,8 @@
 #ifndef FPGAIO_H
 #define FPGAIO_H
 
+#define DEGAUSS_COLD_BOOT_MARKER "@degauss-cold-boot"
+
 #define BUTTON_OSD  1
 #define BUTTON_USR  2
 

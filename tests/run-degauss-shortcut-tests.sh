@@ -25,6 +25,11 @@ grep -B8 'degauss_shortcut_handle_keyboard_event' input.cpp | grep -q 'valid_key
 grep -B8 'degauss_shortcut_handle_keyboard_event' input.cpp | grep -q '!input\[dev\]\.force_joy'
 grep -q 'uint8_t  kbdmap\[256\]' input.cpp
 
+# The Enter release that opened capture must reach Main's ordinary keyboard
+# path, otherwise the next Enter press remains latched and is ignored.
+capture_handler="$(sed -n '/bool degauss_shortcut_handle_keyboard_event/,/^}/p' support/degauss/degauss_shortcut.cpp)"
+printf '%s\n' "$capture_handler" | grep -Fq 'if (!value) return false;'
+
 # The two Degauss rows must follow their visible order when Up or Down changes
 # menusub. They stay above every stock System-menu index, with no controller
 # direction required to open the shortcut settings.
@@ -62,3 +67,17 @@ if grep -q 'set/capture' menu.cpp; then
 	echo "Frontend shortcut UI still uses the ambiguous set/capture label" >&2
 	exit 1
 fi
+
+# The custom Menu core supports Degauss's native analog framebuffer path.
+# Keep Main's stock vga_scaler warning for ordinary framebuffer scripts, but
+# suppress its text for Degauss while retaining the function's OSD shutdown.
+grep -A4 'degauss_running = degauss_is_frontend_script' menu.cpp \
+	| grep -q 'vga_nag(!degauss_running);'
+
+# A failed terminal fork must restore the Menu framebuffer immediately rather
+# than treating pid -1 as a running child and leaving Degauss video active.
+degauss_launch="$(sed -n '/degauss_running = degauss_is_frontend_script/,/case MENU_SCRIPTS_FB2:/p' menu.cpp)"
+printf '%s\n' "$degauss_launch" | grep -q 'if (ttypid < 0)'
+printf '%s\n' "$degauss_launch" | grep -q 'video_set_degauss_native_fb(false);'
+printf '%s\n' "$degauss_launch" | grep -q 'video_fb_enable(0);'
+printf '%s\n' "$degauss_launch" | grep -q 'menustate = MENU_SYSTEM1;'

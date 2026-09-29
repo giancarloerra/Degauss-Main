@@ -55,7 +55,8 @@ void  video_set_shadow_mask_mode(int n);
 char* video_get_shadow_mask(int only_name = 1);
 void  video_set_shadow_mask(const char *name);
 bool  video_set_degauss_display_mask(const char *name);
-void  video_loadPreset(char *name, bool save);
+bool  video_set_degauss_preset(const char *name, char *error, size_t error_size);
+bool  video_loadPreset(char *name, bool save);
 
 int   video_get_rotated();
 
@@ -67,6 +68,7 @@ int   hasAPI1_5();
 
 void video_fb_enable(int enable, int n = 0);
 int video_fb_state();
+void video_set_degauss_native_fb(bool enable);
 void video_menu_bg(int n, int idle = 0);
 int video_bg_has_picture();
 int video_chvt(int num);

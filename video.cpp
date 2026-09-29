@@ -19,6 +19,7 @@
 #include "file_io.h"
 #include "mat4x4.h"
 #include "menu.h"
+#include "osd.h"
 #include "video.h"
 #include "input.h"
 #include "shmem.h"
@@ -50,6 +51,8 @@
 #define FB_FMT_PAL8 0b00011
 #define FB_FMT_RxB  0b10000
 #define FB_EN       0x8000
+#define FB_FILTER   0x4000
+#define FB_NATIVE   0x2000
 
 #define FB_DV_LBRD  3
 #define FB_DV_RBRD  6
@@ -75,6 +78,7 @@ static int fb_enabled = 0;
 static int fb_width = 0;
 static int fb_height = 0;
 static int fb_num = 0;
+static bool degauss_native_fb = false;
 static int brd_x = 0;
 static int brd_y = 0;
 
@@ -805,6 +809,13 @@ static char shadow_mask_cfg[1024] = { 0 };
 static bool has_shadow_mask = false;
 static char degauss_display_mask[129] = { 0 };
 static bool degauss_display_mask_loaded = false;
+static char degauss_mask_before_preset[129] = { 0 };
+static char degauss_gamma_before_preset[sizeof(gamma_cfg)] = { 0 };
+static ScalerFilter degauss_scaler_before_preset[4] = {};
+static VideoFilter degauss_scaler_data_before_preset[4] = {};
+static char degauss_shadow_mask_before_preset[sizeof(shadow_mask_cfg)] = { 0 };
+static bool degauss_preset_active = false;
+static bool degauss_preset_filter = false;
 
 #define SM_FLAG_2X      ( 1 << 1 )
 #define SM_FLAG_ROTATED ( 1 << 2 )
@@ -841,13 +852,14 @@ static void setShadowMask()
 
 	has_shadow_mask = 1;
 	degauss_display_mask_loaded = false;
+	const int fb_mask = (degauss_display_mask[0] || degauss_preset_active) ? SM_FLAG_FB : 0;
 	switch (degauss_display_mask[0] ? SM_MODE_1X : video_get_shadow_mask_mode())
 	{
 		default: spi_w(SM_FLAG(0)); break;
-		case SM_MODE_1X: spi_w(SM_FLAG(SM_FLAG_ENABLED | (degauss_display_mask[0] ? SM_FLAG_FB : 0))); break;
-		case SM_MODE_2X: spi_w(SM_FLAG(SM_FLAG_ENABLED | SM_FLAG_2X)); break;
-		case SM_MODE_1X_ROTATED: spi_w(SM_FLAG(SM_FLAG_ENABLED | SM_FLAG_ROTATED)); break;
-		case SM_MODE_2X_ROTATED: spi_w(SM_FLAG(SM_FLAG_ENABLED | SM_FLAG_ROTATED | SM_FLAG_2X)); break;
+		case SM_MODE_1X: spi_w(SM_FLAG(SM_FLAG_ENABLED | fb_mask)); break;
+		case SM_MODE_2X: spi_w(SM_FLAG(SM_FLAG_ENABLED | SM_FLAG_2X | fb_mask)); break;
+		case SM_MODE_1X_ROTATED: spi_w(SM_FLAG(SM_FLAG_ENABLED | SM_FLAG_ROTATED | fb_mask)); break;
+		case SM_MODE_2X_ROTATED: spi_w(SM_FLAG(SM_FLAG_ENABLED | SM_FLAG_ROTATED | SM_FLAG_2X | fb_mask)); break;
 	}
 
 	int loaded = 0;
@@ -991,6 +1003,8 @@ void video_set_shadow_mask(const char *name)
 	video_save_shadow_mask_cfg();
 }
 
+static bool degauss_validate_mask_path(const char *path);
+
 bool video_set_degauss_display_mask(const char *name)
 {
 	if (!is_menu() || !video_fb_state())
@@ -1009,6 +1023,22 @@ bool video_set_degauss_display_mask(const char *name)
 			printf("Degauss display mask: invalid file name\n");
 			return false;
 		}
+	}
+	if (degauss_preset_active)
+	{
+		if (name)
+		{
+			char path[1024];
+			snprintf(path, sizeof(path), "Scripts/.config/degauss/masks/%s.txt", name);
+			if (!degauss_validate_mask_path(path))
+			{
+				degauss_mask_before_preset[0] = 0;
+				printf("Degauss display mask was not applied; effect switched off. Check the mask file\n");
+				return false;
+			}
+		}
+		snprintf(degauss_mask_before_preset, sizeof(degauss_mask_before_preset), "%s", name ? name : "");
+		return true;
 	}
 
 	snprintf(degauss_display_mask, sizeof(degauss_display_mask), "%s", name ? name : "");
@@ -1064,6 +1094,194 @@ static char* get_preset_arg(const char *str)
 	return par;
 }
 
+static bool degauss_preset_path(const char *name)
+{
+	return name && name[0] && name[0] != '/' && !strstr(name, "..") &&
+		!strpbrk(name, "\\\r\n") && strlen(name) < 900;
+}
+
+static bool degauss_validate_gamma(const char *name)
+{
+	char path[1024];
+	snprintf(path, sizeof(path), GAMMA_DIR"/%s", name);
+	fileTextReader reader;
+	if (!FileOpenTextReader(&reader, path)) return false;
+	int count = 0;
+	const char *line;
+	while ((line = FileReadLine(&reader)))
+	{
+		if (!line[0] || line[0] == '#') continue;
+		int red, green, blue;
+		const int fields = sscanf(line, "%d,%d,%d", &red, &green, &blue);
+		if (fields != 1 && fields != 3) return false;
+		if (fields == 1) green = blue = red;
+		if (red < 0 || red > 255 || green < 0 || green > 255 || blue < 0 || blue > 255) return false;
+		if (++count > 256) return false;
+	}
+	return count == 256;
+}
+
+static bool degauss_validate_mask_path(const char *path)
+{
+	fileTextReader reader;
+	if (!FileOpenTextReader(&reader, path)) return false;
+	int width = -1, height = 0, row = 0, blocks = 0;
+	bool v2 = false;
+	const char *line;
+	while ((line = FileReadLine(&reader)))
+	{
+		if (!line[0] || line[0] == '#') continue;
+		if (!strncasecmp(line, "resolution=", 11))
+		{
+			unsigned threshold = 0;
+			if (width != -1 || sscanf(line + 11, "%u", &threshold) != 1 || !threshold) return false;
+			v2 = false;
+			continue;
+		}
+		if (width == -1)
+		{
+			if (!strcasecmp(line, "v2")) { v2 = true; continue; }
+			if (sscanf(line, "%d,%d", &width, &height) != 2 ||
+				width < 1 || width > 16 || height < 1 || height > 16) return false;
+			row = 0;
+			continue;
+		}
+		const char *part = line;
+		for (int x = 0; x < width; x++)
+		{
+			char *end;
+			const unsigned long value = strtoul(part, &end, 16);
+			if (end == part || value > (v2 ? 0x7FF : 7)) return false;
+			if (x + 1 < width)
+			{
+				if (*end != ',') return false;
+				part = end + 1;
+			}
+			else if (*end) return false;
+		}
+		if (++row == height)
+		{
+			blocks++;
+			width = -1;
+			v2 = false;
+		}
+	}
+	return blocks > 0 && width == -1;
+}
+
+static bool degauss_validate_mask(const char *name)
+{
+	char path[1024];
+	snprintf(path, sizeof(path), SMASK_DIR"/%s", name);
+	return degauss_validate_mask_path(path);
+}
+
+static bool degauss_validate_preset(const char *path, char *error, size_t size)
+{
+	fileTextReader reader;
+	if (!FileOpenTextReader(&reader, path))
+	{
+		snprintf(error, size, "Cannot read preset");
+		return false;
+	}
+	const char *line;
+	bool recognized = false;
+	while ((line = FileReadLine(&reader)))
+	{
+		const char *value = NULL;
+		int filter = -1;
+		const char *folder = NULL;
+		if (!strncasecmp(line, "hfilter=", 8)) { value = line + 8; filter = VFILTER_HORZ; folder = COEFF_DIR; }
+		else if (!strncasecmp(line, "vfilter=", 8)) { value = line + 8; filter = VFILTER_VERT; folder = COEFF_DIR; }
+		else if (!strncasecmp(line, "sfilter=", 8)) { value = line + 8; filter = VFILTER_SCAN; folder = COEFF_DIR; }
+		else if (!strncasecmp(line, "ifilter=", 8)) { value = line + 8; filter = VFILTER_ILACE; folder = COEFF_DIR; }
+		else if (!strncasecmp(line, "gamma=", 6)) { value = line + 6; folder = GAMMA_DIR; }
+		else if (!strncasecmp(line, "mask=", 5)) { value = line + 5; folder = SMASK_DIR; }
+		else if (!strncasecmp(line, "maskmode=", 9))
+		{
+			recognized = true;
+			if (!line[9])
+			{
+				snprintf(error, size, "Empty preset component");
+				return false;
+			}
+			const char *mode = get_preset_arg(line + 9);
+			if (strcasecmp(mode, "off") && strcasecmp(mode, "none") &&
+				strcasecmp(mode, "1x") && strcasecmp(mode, "2x") &&
+				strcasecmp(mode, "1x rotated") && strcasecmp(mode, "2x rotated"))
+			{
+				snprintf(error, size, "Invalid mask mode");
+				return false;
+			}
+			if (strcasecmp(mode, "off") && strcasecmp(mode, "none") && !spi_uio_cmd(UIO_SHADOWMASK))
+			{
+				snprintf(error, size, "Menu does not support shadow masks");
+				return false;
+			}
+			continue;
+		}
+		else continue;
+		recognized = true;
+		if (!value[0])
+		{
+			snprintf(error, size, "Empty preset component");
+			return false;
+		}
+		const char *name = get_preset_arg(value);
+		if (!name[0])
+		{
+			snprintf(error, size, "Empty preset component");
+			return false;
+		}
+		if (filter >= 0 && (!strcasecmp(name, "off") || !strcasecmp(name, "same"))) continue;
+		if (filter < 0 && (!strcasecmp(name, "off") || !strcasecmp(name, "none"))) continue;
+		if (!degauss_preset_path(name))
+		{
+			snprintf(error, size, "Invalid preset component name");
+			return false;
+		}
+		char component[1024];
+		snprintf(component, sizeof(component), "%s/%s", folder, name);
+		if (!FileExists(component))
+		{
+			snprintf(error, size, "Missing %s", component);
+			return false;
+		}
+		if (filter >= 0)
+		{
+			const int supported = spi_uio_cmd(UIO_SET_FLTNUM);
+			if (!supported)
+			{
+				snprintf(error, size, "Menu does not support video filters");
+				return false;
+			}
+			char saved[sizeof(scaler_flt[0].filename)];
+			snprintf(saved, sizeof(saved), "%s", scaler_flt[filter].filename);
+			snprintf(scaler_flt[filter].filename, sizeof(scaler_flt[filter].filename), "%s", name);
+			VideoFilter parsed;
+			const bool valid = read_video_filter(filter, &parsed);
+			snprintf(scaler_flt[filter].filename, sizeof(scaler_flt[filter].filename), "%s", saved);
+			if (!valid)
+			{
+				snprintf(error, size, "Malformed %s", component);
+				return false;
+			}
+		}
+		else if (!strcmp(folder, GAMMA_DIR) && (!has_gamma || !degauss_validate_gamma(name)))
+		{
+			snprintf(error, size, "Gamma unavailable or malformed: %s", component);
+			return false;
+		}
+		else if (!strcmp(folder, SMASK_DIR) && (!spi_uio_cmd(UIO_SHADOWMASK) || !degauss_validate_mask(name)))
+		{
+			snprintf(error, size, "Shadow mask unavailable or malformed: %s", component);
+			return false;
+		}
+	}
+	if (!recognized) snprintf(error, size, "Preset has no supported video settings");
+	return recognized;
+}
+
 static void load_flt_pres(const char *str, int type)
 {
 	char *arg = get_preset_arg(str);
@@ -1081,7 +1299,7 @@ static void load_flt_pres(const char *str, int type)
 	}
 }
 
-void video_loadPreset(char *name, bool save)
+bool video_loadPreset(char *name, bool save)
 {
 	char *arg;
 	fileTextReader reader;
@@ -1089,8 +1307,9 @@ void video_loadPreset(char *name, bool save)
 	bool scaler_dirty = false;
 	bool mask_dirty = false;
 	bool gamma_dirty = false;
+	const bool opened = FileOpenTextReader(&reader, name);
 
-	if (FileOpenTextReader(&reader, name))
+	if (opened)
 	{
 		const char *line;
 		while ((line = FileReadLine(&reader)))
@@ -1161,6 +1380,7 @@ void video_loadPreset(char *name, bool save)
 		if (mask_dirty) video_save_shadow_mask_cfg();
 		if (gamma_dirty) video_save_gamma_cfg();
 	}
+	return opened;
 }
 
 static void hdmi_packet_enable(uint8_t mask, bool enable)
@@ -2713,6 +2933,63 @@ static void video_cfg_init()
 	loadShadowMaskCfg();
 }
 
+static void degauss_restore_preset_baseline(bool reapply_framebuffer)
+{
+	degauss_preset_active = false;
+	degauss_preset_filter = false;
+	memcpy(gamma_cfg, degauss_gamma_before_preset, sizeof(gamma_cfg));
+	memcpy(scaler_flt, degauss_scaler_before_preset, sizeof(scaler_flt));
+	memcpy(scaler_flt_data, degauss_scaler_data_before_preset, sizeof(scaler_flt_data));
+	memcpy(shadow_mask_cfg, degauss_shadow_mask_before_preset, sizeof(shadow_mask_cfg));
+	snprintf(degauss_display_mask, sizeof(degauss_display_mask), "%s", degauss_mask_before_preset);
+	setGamma();
+	if (has_gamma) spi_uio_cmd8(UIO_SET_GAMMA, gamma_cfg[0]);
+	setScaler();
+	setShadowMask();
+	if (reapply_framebuffer && video_fb_state()) video_fb_enable(1, fb_num);
+}
+
+bool video_set_degauss_preset(const char *name, char *error, size_t error_size)
+{
+	if (!is_menu() || !video_fb_state())
+	{
+		snprintf(error, error_size, "Degauss video presets require the Menu framebuffer");
+		return false;
+	}
+	if (!name || !name[0])
+	{
+		if (degauss_preset_active) degauss_restore_preset_baseline(true);
+		return true;
+	}
+	if (!degauss_preset_path(name))
+	{
+		snprintf(error, error_size, "Invalid preset name");
+		return false;
+	}
+	char path[1024];
+	snprintf(path, sizeof(path), PRESET_DIR"/%s", name);
+	if (!degauss_validate_preset(path, error, error_size)) return false;
+
+	if (degauss_preset_active) degauss_restore_preset_baseline(true);
+	snprintf(degauss_mask_before_preset, sizeof(degauss_mask_before_preset), "%s", degauss_display_mask);
+	memcpy(degauss_gamma_before_preset, gamma_cfg, sizeof(gamma_cfg));
+	memcpy(degauss_scaler_before_preset, scaler_flt, sizeof(scaler_flt));
+	memcpy(degauss_scaler_data_before_preset, scaler_flt_data, sizeof(scaler_flt_data));
+	memcpy(degauss_shadow_mask_before_preset, shadow_mask_cfg, sizeof(shadow_mask_cfg));
+	degauss_display_mask[0] = 0;
+	degauss_preset_active = true;
+	if (!video_loadPreset(path, false))
+	{
+		degauss_restore_preset_baseline(true);
+		snprintf(error, error_size, "Preset could not be opened");
+		return false;
+	}
+	degauss_preset_filter = scaler_flt[VFILTER_HORZ].mode || scaler_flt[VFILTER_VERT].mode ||
+		scaler_flt[VFILTER_SCAN].mode || scaler_flt[VFILTER_ILACE].mode;
+	if (video_fb_state()) video_fb_enable(1, fb_num);
+	return true;
+}
+
 void video_cfg_reset()
 {
 	FileDeleteConfig(gamma_cfg_path);
@@ -2768,7 +3045,7 @@ void video_reinit()
 	support_FHD = 0;
 	video_mode_load(true);
 
-	video_cfg_init();
+	if (!degauss_preset_active) video_cfg_init();
 	video_set_mode(&v_def, 0);
 	user_io_send_buttons(1);
 	video_mode_adjust(1);
@@ -3548,6 +3825,11 @@ static void fb_write_module_params()
 	});
 }
 
+static bool video_degauss_native_fb_active()
+{
+	return degauss_native_fb && is_menu() && !cfg.vga_scaler;
+}
+
 void video_fb_enable(int enable, int n)
 {
 	PROFILE_FUNCTION();
@@ -3576,7 +3858,8 @@ void video_fb_enable(int enable, int n)
 				}
 
 				//printf("Switch to Linux frame buffer\n");
-				spi_w((uint16_t)(FB_EN | FB_FMT_RxB | FB_FMT_8888)); // format, enable flag
+				spi_w((uint16_t)(FB_EN | (degauss_preset_filter ? FB_FILTER : 0) |
+					(video_degauss_native_fb_active() ? FB_NATIVE : 0) | FB_FMT_RxB | FB_FMT_8888)); // format, enable flag
 				spi_w((uint16_t)fb_addr); // base address low word
 				spi_w(fb_addr >> 16);     // base address high word
 				spi_w(fb_width);          // frame width
@@ -3614,6 +3897,8 @@ void video_fb_enable(int enable, int n)
 		}
 
 		DisableIO();
+		if (!video_fb_state() && degauss_preset_active)
+			degauss_restore_preset_baseline(false);
 		if (!video_fb_state() && degauss_display_mask[0])
 		{
 			degauss_display_mask[0] = 0;
@@ -3642,6 +3927,7 @@ int video_fb_state()
 static void video_fb_config()
 {
 	PROFILE_FUNCTION();
+	static_assert(FB_SIZE >= 352 * 288, "Degauss native framebuffer must fit");
 
 	int fb_scale = cfg.fb_size;
 
@@ -3655,18 +3941,36 @@ static void video_fb_config()
 	else if (fb_scale == 3) fb_scale = 2;
 	else if (fb_scale > 4) fb_scale = 4;
 
-	const int fb_scale_x = fb_scale;
-	const int fb_scale_y = v_cur.param.pr == 0 ? fb_scale : fb_scale * 2;
+	if (video_degauss_native_fb_active())
+	{
+		fb_width = 352;
+		fb_height = cfg.menu_pal ? 288 : 240;
+		brd_x = 0;
+		brd_y = 0;
+	}
+	else
+	{
+		const int fb_scale_x = fb_scale * cfg.fb_hscale;
+		const int fb_scale_y = v_cur.param.pr == 0 ? fb_scale : fb_scale * 2;
 
-	fb_width = v_cur.item[1] / fb_scale_x;
-	fb_height = v_cur.item[5] / fb_scale_y;
+		fb_width = v_cur.item[1] / fb_scale_x;
+		fb_height = v_cur.item[5] / fb_scale_y;
 
-	brd_x = cfg.vscale_border / fb_scale_x;
-	brd_y = cfg.vscale_border / fb_scale_y;
+		brd_x = cfg.vscale_border / fb_scale_x;
+		brd_y = cfg.vscale_border / fb_scale_y;
+	}
 
 	if (fb_enabled) video_fb_enable(1, fb_num);
 
 	fb_write_module_params();
+}
+
+void video_set_degauss_native_fb(bool enable)
+{
+	enable = enable && cfg.degauss_native_analog;
+	if (degauss_native_fb == enable) return;
+	degauss_native_fb = enable;
+	video_fb_config();
 }
 
 static void draw_checkers()
@@ -3676,6 +3980,7 @@ static void draw_checkers()
 	uint32_t col1 = 0x888888;
 	uint32_t col2 = 0x666666;
 	int sz = fb_width / 128;
+	if (!sz) sz = 1;
 
 	for (int y = brd_y; y < fb_height - brd_y; y++)
 	{
@@ -4019,10 +4324,11 @@ void video_menu_bg(int n, int idle)
 					vs_wait();
 				};
 
-				if (cfg.osd_rotate)
+				int rot = OsdGetRotation(true);
+				if (rot)
 				{
 					imlib_context_set_image(logo);
-					imlib_image_orientate(cfg.osd_rotate == 1 ? 3 : 1);
+					imlib_image_orientate(rot == 1 ? 3 : 1);
 				}
 			}
 			else
@@ -4126,11 +4432,12 @@ void video_menu_bg(int n, int idle)
 
 			int dst_w, dst_h;
 			int dst_x, dst_y;
-			if (cfg.osd_rotate)
+			int rot = OsdGetRotation(true);
+			if (rot)
 			{
 				dst_h = height / 2;
 				dst_w = src_w * dst_h / src_h;
-				if (cfg.osd_rotate == 1)
+				if (rot == 1)
 				{
 					dst_x = brd_x;
 					dst_y = height - dst_h;
