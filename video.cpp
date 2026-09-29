@@ -1003,6 +1003,8 @@ void video_set_shadow_mask(const char *name)
 	video_save_shadow_mask_cfg();
 }
 
+static bool degauss_validate_mask_path(const char *path);
+
 bool video_set_degauss_display_mask(const char *name)
 {
 	if (!is_menu() || !video_fb_state())
@@ -1028,7 +1030,7 @@ bool video_set_degauss_display_mask(const char *name)
 		{
 			char path[1024];
 			snprintf(path, sizeof(path), "Scripts/.config/degauss/masks/%s.txt", name);
-			if (!FileExists(path))
+			if (!degauss_validate_mask_path(path))
 			{
 				degauss_mask_before_preset[0] = 0;
 				printf("Degauss display mask was not applied; effect switched off. Check the mask file\n");
@@ -1119,10 +1121,8 @@ static bool degauss_validate_gamma(const char *name)
 	return count == 256;
 }
 
-static bool degauss_validate_mask(const char *name)
+static bool degauss_validate_mask_path(const char *path)
 {
-	char path[1024];
-	snprintf(path, sizeof(path), SMASK_DIR"/%s", name);
 	fileTextReader reader;
 	if (!FileOpenTextReader(&reader, path)) return false;
 	int width = -1, height = 0, row = 0, blocks = 0;
@@ -1167,6 +1167,13 @@ static bool degauss_validate_mask(const char *name)
 		}
 	}
 	return blocks > 0 && width == -1;
+}
+
+static bool degauss_validate_mask(const char *name)
+{
+	char path[1024];
+	snprintf(path, sizeof(path), SMASK_DIR"/%s", name);
+	return degauss_validate_mask_path(path);
 }
 
 static bool degauss_validate_preset(const char *path, char *error, size_t size)

@@ -103,9 +103,9 @@ printf '%s\n' "$preset_apply" | grep -Fq 'if (!video_loadPreset(path, false))'
 printf '%s\n' "$preset_apply" | grep -Fq 'degauss_restore_preset_baseline(true);'
 printf '%s\n' "$preset_apply" | grep -Fq 'return false;'
 
-# A mask selected while a full preset is active is checked before it is
-# accepted as the state to restore later. A missing file resets that state.
+# A mask selected while a full preset is active is parsed before it is
+# accepted as the state to restore later. A missing or malformed file resets it.
 deferred_mask="$(sed -n '/if (degauss_preset_active)/,/return true;/p' video.cpp | head -n 20)"
 printf '%s\n' "$deferred_mask" | grep -Fq 'Scripts/.config/degauss/masks/%s.txt'
-printf '%s\n' "$deferred_mask" | grep -Fq 'if (!FileExists(path))'
+printf '%s\n' "$deferred_mask" | grep -Fq 'if (!degauss_validate_mask_path(path))'
 printf '%s\n' "$deferred_mask" | grep -Fq 'degauss_mask_before_preset[0] = 0;'
