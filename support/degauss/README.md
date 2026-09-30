@@ -17,6 +17,8 @@ read its shortcut configuration.
 - Starting `degauss.sh` from the Scripts menu uses the same framebuffer
   execution path without the console banner or final key prompt.
 - Cards without functional Degauss support keep the stock Main behaviour.
+- Exiting the frontend opens the native core chooser at the root when the
+  private Degauss Menu core is active. Ordinary core and MRA locations are unchanged.
 
 ## Optional return shortcut
 
@@ -65,6 +67,7 @@ dependencies and can be checked on the host:
 
 ```bash
 ./tests/run-degauss-shortcut-tests.sh
+python3 tests/run-degauss-core-menu-tests.py
 ```
 
 The complete fork build uses the existing containerised ARM toolchain:
