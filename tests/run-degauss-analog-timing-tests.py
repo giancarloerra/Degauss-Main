@@ -76,6 +76,7 @@ static struct {
 } cfg = {};
 static int capability = 0xD161;
 static unsigned disable_calls = 0;
+static int vga_enable = -1;
 static std::vector<uint16_t> words;
 static bool is_menu() { return menu_active; }
 static bool video_degauss_native_fb_active() { return native_active; }
@@ -87,7 +88,7 @@ static void input_switch(int) {}
 static int video_fb_state() { return fb_enabled && !fb_num; }
 static void degauss_restore_preset_baseline(bool) {}
 static void setShadowMask() {}
-static void set_vga_fb(int) {}
+static void set_vga_fb(int enable) { vga_enable = enable; }
 static void set_yc_mode() {}
 static void user_io_status_set(const char *, unsigned) {}
 '''
@@ -165,6 +166,18 @@ int main() {
     video_fb_enable(0, 0);
     assert(words.size() == 1 && words[0] == 0);
     assert(fb_enabled == 0);
+
+    // A core rejecting the framebuffer command must not enable Direct Video
+    // merely because a Menu background was requested.
+    words.clear();
+    menu_bg = 1;
+    capability = 0;
+    cfg.direct_video = 1;
+    video_fb_enable(0, 0);
+    assert(words.empty() && vga_enable == 0 && fb_enabled == 0);
+    cfg.direct_video = 0;
+    menu_bg = 0;
+    capability = 1;
 
     // Rejected INI values must not change the stored framebuffer dimensions.
     strcpy(cfg.degauss_analog_video_mode, zero_clock);

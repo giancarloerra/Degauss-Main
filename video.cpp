@@ -3881,17 +3881,17 @@ void video_fb_enable(int enable, int n)
 
 	if (fb_base)
 	{
-		if (is_menu() && !enable && menu_bg)
-		{
-			enable = 1;
-			n = menu_bgn;
-		}
 		uint16_t native_timing[8] = {};
 		const bool native = video_degauss_native_fb_active();
-		if (enable && native && !prepare_degauss_native_timing(native_timing)) return;
+		if ((enable || menu_bg) && native && !prepare_degauss_native_timing(native_timing)) return;
 		int res = spi_uio_cmd_cont(UIO_SET_FBUF);
 		if (res)
 		{
+			if (is_menu() && !enable && menu_bg)
+			{
+				enable = 1;
+				n = menu_bgn;
+			}
 			if (enable && native && cfg.degauss_analog_video_mode[0] && res != 0xD161)
 			{
 				DisableIO();
