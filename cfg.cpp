@@ -71,6 +71,7 @@ static const ini_var_t ini_vars[] =
 	{ "FB_SIZE", (void*)(&(cfg.fb_size)), UINT8, 0, 4 },
 	{ "FB_HSCALE", (void*)(&(cfg.fb_hscale)), UINT8, 1, 4 },
 	{ "DEGAUSS_NATIVE_ANALOG", (void*)(&(cfg.degauss_native_analog)), UINT8, 0, 1 },
+	{ "DEGAUSS_ANALOG_VIDEO_MODE", (void*)(cfg.degauss_analog_video_mode), STRING, 0, sizeof(cfg.degauss_analog_video_mode) - 1 },
 	{ "FB_TERMINAL", (void*)(&(cfg.fb_terminal)), UINT8, 0, 1 },
 	{ "OSD_TIMEOUT", (void*)(&(cfg.osd_timeout)), INT16, 0, 3600 },
 	{ "DIRECT_VIDEO", (void*)(&(cfg.direct_video)), UINT8, 0, 2 },
