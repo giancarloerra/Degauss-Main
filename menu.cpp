@@ -463,6 +463,8 @@ void SelectFile(const char* path, const char* pFileExt, int Options, unsigned ch
 			strcat(selPath, get_rbf_name());
 		}
 		ResolveExistingCorePath(selPath);
+		// The private Menu core is support data, not a core-browsing folder.
+		if (is_menu() && !strcmp(get_rbf_path(), "/media/fat/degauss/menu.rbf")) selPath[0] = 0;
 		pFileExt = "RBFMRAMGL";
 		home_dir = NULL;
 	}
