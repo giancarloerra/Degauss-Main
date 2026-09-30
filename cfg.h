@@ -69,6 +69,7 @@ typedef struct {
 	char video_conf[1024];
 	char video_conf_pal[1024];
 	char video_conf_ntsc[1024];
+	char degauss_analog_video_mode[1024];
 	char font[1024];
 	char shared_folder[1024];
 	char waitmount[1024];

@@ -2560,7 +2560,7 @@ static void video_set_mode(vmode_custom_t *v, double Fpix)
 	setShadowMask();
 }
 
-static int parse_custom_video_mode(char* vcfg, vmode_custom_t *v)
+static int parse_custom_video_mode(char* vcfg, vmode_custom_t *v, bool calculate_pll = true)
 {
 	char *tokens[32];
 	uint32_t val[32];
@@ -2618,6 +2618,8 @@ static int parse_custom_video_mode(char* vcfg, vmode_custom_t *v)
 	}
 	else if (cnt == 3)
 	{
+		// Analog overrides require explicit CRT timings, not calculated CVT modes.
+		if (!calculate_pll) return -1;
 		video_calculate_cvt(val[0], val[1], valf ? valf : val[2], v->param.rb, v);
 	}
 	else if (cnt >= 21)
@@ -2646,7 +2648,7 @@ static int parse_custom_video_mode(char* vcfg, vmode_custom_t *v)
 		return -1;
 	}
 
-	setPLL(v->Fpix, v);
+	if (calculate_pll) setPLL(v->Fpix, v);
 	return -2;
 }
 
@@ -3830,21 +3832,72 @@ static bool video_degauss_native_fb_active()
 	return degauss_native_fb && is_menu() && !cfg.vga_scaler;
 }
 
+// The native Menu reader runs at 20 MHz. Preserve modeline durations by
+// translating horizontal edges to that clock, rather than changing HDMI's PLL.
+static bool degauss_native_timing(const vmode_custom_t &mode, uint16_t timing[8])
+{
+	if (!isfinite(mode.Fpix) || mode.Fpix <= 0 || mode.param.pr ||
+		!mode.item[1] || mode.item[1] > 4095 || !mode.item[3] || !mode.item[5] || !mode.item[7] ||
+		(uint64_t)mode.item[1] * mode.item[5] > FB_SIZE) return false;
+
+	const double scale = 20.0 / mode.Fpix;
+	const double hdisp = mode.item[1];
+	const double hsstart = hdisp + mode.item[2];
+	const double hsend = hsstart + mode.item[3];
+	const double edges[8] = {
+		(hsend + mode.item[4]) * scale, hsstart * scale, hsend * scale, hdisp * scale,
+		(double)mode.item[5] + mode.item[6] + mode.item[7] + mode.item[8],
+		(double)mode.item[5] + mode.item[6],
+		(double)mode.item[5] + mode.item[6] + mode.item[7], (double)mode.item[5]
+	};
+	for (unsigned i = 0; i < 8; i++)
+	{
+		if (!isfinite(edges[i]) || edges[i] < 1 || edges[i] > 4095) return false;
+		timing[i] = (uint16_t)lround(edges[i]);
+	}
+	return timing[3] <= timing[1] && timing[1] < timing[2] && timing[2] < timing[0] &&
+		timing[7] <= timing[5] && timing[5] < timing[6] && timing[6] < timing[4];
+}
+
+static bool prepare_degauss_native_timing(uint16_t timing[8], int *width = nullptr, int *height = nullptr)
+{
+	memset(timing, 0, 8 * sizeof(*timing));
+	if (!cfg.degauss_analog_video_mode[0]) return true;
+	vmode_custom_t mode = {};
+	if (parse_custom_video_mode(cfg.degauss_analog_video_mode, &mode, false) != -2 ||
+		!degauss_native_timing(mode, timing))
+	{
+		cfg_error("Invalid DEGAUSS_ANALOG_VIDEO_MODE: custom progressive CRT modeline required");
+		return false;
+	}
+	if (width) *width = mode.item[1];
+	if (height) *height = mode.item[5];
+	return true;
+}
+
 void video_fb_enable(int enable, int n)
 {
 	PROFILE_FUNCTION();
 
 	if (fb_base)
 	{
+		if (is_menu() && !enable && menu_bg)
+		{
+			enable = 1;
+			n = menu_bgn;
+		}
+		uint16_t native_timing[8] = {};
+		const bool native = video_degauss_native_fb_active();
+		if (enable && native && !prepare_degauss_native_timing(native_timing)) return;
 		int res = spi_uio_cmd_cont(UIO_SET_FBUF);
 		if (res)
 		{
-			if (is_menu() && !enable && menu_bg)
+			if (enable && native && cfg.degauss_analog_video_mode[0] && res != 0xD161)
 			{
-				enable = 1;
-				n = menu_bgn;
+				DisableIO();
+				cfg_error("DEGAUSS_ANALOG_VIDEO_MODE requires the matching Menu core");
+				return;
 			}
-
 			if (enable)
 			{
 				uint32_t fb_addr = FB_ADDR + (FB_SIZE * 4 * n) + (n ? 0 : 4096);
@@ -3869,6 +3922,14 @@ void video_fb_enable(int enable, int n)
 				spi_w(yoff);                 // scaled top
 				spi_w(yoff + v_cur.item[5] - 1); // scaled bottom
 				spi_w(fb_width * 4);      // stride
+				if (native && res == 0xD161)
+				{
+					for (uint16_t value : native_timing) spi_w(value);
+					if (cfg.degauss_analog_video_mode[0])
+						printf("Degauss analog timing: H %u,%u,%u,%u V %u,%u,%u,%u; HDMI unchanged\n",
+							native_timing[0], native_timing[1], native_timing[2], native_timing[3],
+							native_timing[4], native_timing[5], native_timing[6], native_timing[7]);
+				}
 
 				//printf("Linux frame buffer: %dx%d, stride = %d bytes\n", fb_width, fb_height, fb_width * 4);
 				if (!fb_num)
@@ -3943,8 +4004,11 @@ static void video_fb_config()
 
 	if (video_degauss_native_fb_active())
 	{
-		fb_width = 352;
-		fb_height = cfg.menu_pal ? 288 : 240;
+		int width = 352, height = cfg.menu_pal ? 288 : 240;
+		uint16_t native_timing[8];
+		if (!prepare_degauss_native_timing(native_timing, &width, &height)) return;
+		fb_width = width;
+		fb_height = height;
 		brd_x = 0;
 		brd_y = 0;
 	}

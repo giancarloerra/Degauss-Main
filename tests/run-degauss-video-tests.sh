@@ -54,8 +54,7 @@ grep -Fq '#define FB_NATIVE   0x2000' video.cpp
 grep -Fq 'return degauss_native_fb && is_menu() && !cfg.vga_scaler;' video.cpp
 grep -Fq 'enable = enable && cfg.degauss_native_analog;' video.cpp
 grep -Fq '(video_degauss_native_fb_active() ? FB_NATIVE : 0)' video.cpp
-grep -Fq 'fb_width = 352;' video.cpp
-grep -Fq 'fb_height = cfg.menu_pal ? 288 : 240;' video.cpp
+grep -Fq 'int width = 352, height = cfg.menu_pal ? 288 : 240;' video.cpp
 
 # Very narrow test modes still need a non-zero checker size before the
 # framebuffer diagnostic divides coordinates by it.
