@@ -2618,6 +2618,8 @@ static int parse_custom_video_mode(char* vcfg, vmode_custom_t *v, bool calculate
 	}
 	else if (cnt == 3)
 	{
+		// Analog overrides require explicit CRT timings, not calculated CVT modes.
+		if (!calculate_pll) return -1;
 		video_calculate_cvt(val[0], val[1], valf ? valf : val[2], v->param.rb, v);
 	}
 	else if (cnt >= 21)
@@ -3835,7 +3837,7 @@ static bool video_degauss_native_fb_active()
 static bool degauss_native_timing(const vmode_custom_t &mode, uint16_t timing[8])
 {
 	if (!isfinite(mode.Fpix) || mode.Fpix <= 0 || mode.param.pr ||
-		!mode.item[1] || !mode.item[3] || !mode.item[5] || !mode.item[7] ||
+		!mode.item[1] || mode.item[1] > 4095 || !mode.item[3] || !mode.item[5] || !mode.item[7] ||
 		(uint64_t)mode.item[1] * mode.item[5] > FB_SIZE) return false;
 
 	const double scale = 20.0 / mode.Fpix;
@@ -4002,10 +4004,11 @@ static void video_fb_config()
 
 	if (video_degauss_native_fb_active())
 	{
-		fb_width = 352;
-		fb_height = cfg.menu_pal ? 288 : 240;
+		int width = 352, height = cfg.menu_pal ? 288 : 240;
 		uint16_t native_timing[8];
-		if (!prepare_degauss_native_timing(native_timing, &fb_width, &fb_height)) return;
+		if (!prepare_degauss_native_timing(native_timing, &width, &height)) return;
+		fb_width = width;
+		fb_height = height;
 		brd_x = 0;
 		brd_y = 0;
 	}

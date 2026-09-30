@@ -17,6 +17,8 @@ prepare_start = video.index("static bool prepare_degauss_native_timing(")
 prepare_end = video.index("\n}\n", prepare_start) + 3
 enable_start = video.index("void video_fb_enable(")
 enable_end = video.index("\n}\n", enable_start) + 3
+config_start = video.index("static void video_fb_config()\n{")
+config_end = video.index("\n}\n", config_start) + 3
 harness = r'''
 #include <cassert>
 #include <cmath>
@@ -36,9 +38,10 @@ struct vmode_custom_t {
 };
 static unsigned pll_calls = 0;
 static unsigned cfg_errors = 0;
+static unsigned cvt_calls = 0;
 static void setPLL(double, vmode_custom_t *) { ++pll_calls; }
 static void cfg_error(const char *, ...) { ++cfg_errors; }
-static void video_calculate_cvt(int, int, float, int, vmode_custom_t *) {}
+static void video_calculate_cvt(int, int, float, int, vmode_custom_t *) { ++cvt_calls; }
 static char *strcpyz(char *out, const char *in) { return strcpy(out,in); }
 static int str_tokenize(char *text, const char *separator, char **tokens, int max) {
     int count = 0;
@@ -63,10 +66,14 @@ static uint32_t *fb_base = &framebuffer_storage;
 static bool native_active = true, menu_active = true;
 static int menu_bg = 0, menu_bgn = 1, fb_num = 0, fb_enabled = 0;
 static int fb_width = 320, fb_height = 240;
+static int brd_x = 0, brd_y = 0;
 static bool degauss_preset_filter = false, degauss_preset_active = false;
 static char degauss_display_mask[1024] = {};
 static vmode_custom_t v_cur = {};
-static struct { char degauss_analog_video_mode[1024]; int direct_video; } cfg = {};
+static struct {
+    char degauss_analog_video_mode[1024];
+    int direct_video, fb_size, fb_hscale, menu_pal, vscale_border;
+} cfg = {};
 static int capability = 0xD161;
 static unsigned disable_calls = 0;
 static std::vector<uint16_t> words;
@@ -84,7 +91,7 @@ static void set_vga_fb(int) {}
 static void set_yc_mode() {}
 static void user_io_status_set(const char *, unsigned) {}
 '''
-production += framebuffer + video[prepare_start:prepare_end] + video[enable_start:enable_end]
+production += framebuffer + video[prepare_start:prepare_end] + video[enable_start:enable_end] + video[config_start:config_end]
 checks = r'''
 int main() {
     vmode_custom_t mode = {};
@@ -94,6 +101,9 @@ int main() {
     assert(mode.Fpix == 8.0);
     assert(parse_custom_video_mode(modeline, &mode) == -2);
     assert(pll_calls == 1);
+    char cvt_nan[] = "320,240,nan";
+    assert(parse_custom_video_mode(cvt_nan, &mode, false) == -1);
+    assert(cvt_calls == 0 && pll_calls == 1);
     char zero_clock[] = "320,16,32,32,240,3,3,16,0";
     assert(parse_custom_video_mode(zero_clock, &mode, false) == -2);
     uint16_t timing[8];
@@ -105,6 +115,11 @@ int main() {
     assert(degauss_native_timing(mode, timing));
     const uint16_t expected[] = {1000,840,920,800,262,243,246,240};
     assert(!memcmp(timing, expected, sizeof(expected)));
+    mode.item[1] = 4096;
+    mode.Fpix = 32.0;
+    assert(!degauss_native_timing(mode, timing));
+    memcpy(mode.item, source, sizeof(source));
+    mode.Fpix = 8.0;
     // Equivalent modelines must retain the same real picture width and sync.
     for (unsigned i = 1; i <= 4; ++i) mode.item[i] *= 2;
     mode.Fpix *= 2;
@@ -150,6 +165,23 @@ int main() {
     video_fb_enable(0, 0);
     assert(words.size() == 1 && words[0] == 0);
     assert(fb_enabled == 0);
+
+    // Rejected INI values must not change the stored framebuffer dimensions.
+    strcpy(cfg.degauss_analog_video_mode, zero_clock);
+    fb_width = 321; fb_height = 241;
+    const unsigned config_errors_before = cfg_errors;
+    video_fb_config();
+    assert(cfg_errors == config_errors_before + 1);
+    assert(fb_width == 321 && fb_height == 241);
+    strcpy(cfg.degauss_analog_video_mode, modeline);
+    video_fb_config();
+    assert(fb_width == 320 && fb_height == 240 && brd_x == 0 && brd_y == 0);
+    cfg.degauss_analog_video_mode[0] = 0;
+    video_fb_config();
+    assert(fb_width == 352 && fb_height == 240);
+    cfg.menu_pal = 1;
+    video_fb_config();
+    assert(fb_width == 352 && fb_height == 288);
     puts("Analog timing conversion passed");
 }
 '''
