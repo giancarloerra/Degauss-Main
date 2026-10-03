@@ -453,7 +453,7 @@ const char            *sharpmz_get_tape_buttons_string(void);
 const char            *sharpmz_get_cmt_ascii_mapping_string(void);
 const char            *sharpmz_get_memory_bank_string(short);
 const char            *sharpmz_get_memory_bank_file(short);
-void                   sharpmz_push_filename(char *);
+bool                   sharpmz_push_filename(char *);
 char                  *sharpmz_pop_filename(void);
 char                  *sharpmz_get_next_filename(char);
 char                  *sharpmz_apss_search(char);

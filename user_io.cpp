@@ -1802,7 +1802,7 @@ void user_io_init(const char *path, const char *xml)
 
 	f12_mod = spi_uio_cmd(UIO_GET_F12_MOD);
 
-	if (!mgl_get()->count || is_menu() || is_st() || is_archie() || user_io_core_type() == CORE_TYPE_SHARPMZ)
+	if (!mgl_get()->count || is_menu())
 	{
 		mgl_get()->done = 1;
 	}

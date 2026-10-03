@@ -1125,6 +1125,89 @@ static void *close_pipe_async(void *arg)
 	return NULL;
 }
 
+// These cores have native loaders rather than generic CONF_STR file selectors.
+// Use the same disk slots and tape operations as their OSD menus.
+static bool LoadLegacyMgl(mgl_struct *mgl)
+{
+	if (!is_st() && !is_archie() && user_io_core_type() != CORE_TYPE_SHARPMZ) return false;
+	const mgl_item_struct &item = mgl->item[mgl->current];
+	char path[1024] = {};
+	int length = item.path[0] == '/' ? snprintf(path, sizeof(path), "%s", item.path)
+		: snprintf(path, sizeof(path), "%s/%s", HomeDir(), item.path);
+	const char *error = "Unsupported file type or slot";
+	bool loaded = false;
+	if (length < 0 || length >= (int)sizeof(path)) error = "File path is too long";
+	else if (is_st())
+	{
+		if (item.type == 'S' && item.index >= 0 && item.index < 4)
+		{
+			tos_insert_disk(item.index, path);
+			loaded = tos_disk_is_inserted(item.index);
+			error = "Cannot mount Atari ST disk";
+		}
+		else if (item.type == 'F' && item.index == 0)
+		{
+			if ((loaded = FileExists(path)))
+			{
+				tos_load_cartridge(path);
+				loaded = tos_load_cartridge(NULL);
+			}
+			error = "Cannot open Atari ST cartridge";
+		}
+	}
+	else if (is_archie())
+	{
+		if (item.type == 'S' && item.index >= 0 && item.index < 2)
+		{
+			loaded = user_io_file_mount(path, item.index);
+			error = "Cannot mount Archimedes floppy";
+		}
+		else if (item.type == 'S' && item.index >= 2 && item.index < 4)
+		{
+			archie_hdd_mount(path, item.index - 2);
+			loaded = archie_get_hdd_name(item.index - 2) != NULL;
+			error = "Cannot mount Archimedes hard disk";
+		}
+	}
+	else if (item.type == 'F' && (item.index == 1 || item.index == 2))
+	{
+		int fail = item.index == 1 ? sharpmz_read_tape_header(path) : sharpmz_load_tape_to_ram(path, 0);
+		if (!(loaded = !fail))
+		{
+			switch (fail)
+			{
+				case 1: error = "Cannot open SharpMZ tape"; break;
+				case 2: error = "Cannot read SharpMZ tape header"; break;
+				case 3: error = "SharpMZ RAM load requires machine code"; break;
+				default: error = "Invalid SharpMZ tape"; break;
+			}
+		}
+		else if (item.index == 1)
+		{
+			loaded = sharpmz_push_filename(path);
+			error = "Cannot queue SharpMZ tape";
+		}
+	}
+	if (loaded)
+	{
+		if (cfg.log_file_entry)
+		{
+			const char *name = strrchr(path, '/');
+			MakeFile("/tmp/FULLPATH", path);
+			MakeFile("/tmp/CURRENTPATH", name ? name + 1 : path);
+			MakeFile("/tmp/FILESELECT", "selected");
+		}
+		mgl->state = 3;
+	}
+	else
+	{
+		mgl->done = 1;
+		printf("MGL load failed: %s: %s\n", error, path);
+		Info(error, 10000);
+	}
+	return true;
+}
+
 void HandleUI(void)
 {
 	PROFILE_FUNCTION();
@@ -1268,6 +1351,7 @@ void HandleUI(void)
 			}
 			break;
 		}
+		if (mgl->state == 1) LoadLegacyMgl(mgl);
 	}
 	else
 	{

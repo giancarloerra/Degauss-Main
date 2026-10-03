@@ -405,11 +405,12 @@ static void fill_tx(uint16_t fill, uint32_t len, int index)
 }
 
 static char tos_cart_img[1024] = {};
-void tos_load_cartridge(const char *name)
+bool tos_load_cartridge(const char *name)
 {
 	if (name)
 	{
 		strncpy(tos_cart_img, name, 1023);
+		return true;
 	}
 	else
 	{
@@ -420,7 +421,12 @@ void tos_load_cartridge(const char *name)
 		if (buf)
 		{
 			memset(buf, -1, sz);
-			if (!(config.system_ctrl & TOS_CONTROL_DONGLE)) FileLoad(tos_cart_img, buf, sz);
+			bool loaded = true;
+			if (!(config.system_ctrl & TOS_CONTROL_DONGLE))
+			{
+				int read = FileLoad(tos_cart_img, buf, sz);
+				loaded = !tos_cart_img[0] || read > 0;
+			}
 
 			user_io_set_index(2);
 			user_io_set_download(1);
@@ -429,8 +435,10 @@ void tos_load_cartridge(const char *name)
 
 			user_io_set_download(0);
 			delete[] buf;
+			return loaded;
 		}
 	}
+	return false;
 }
 
 char tos_cartridge_is_inserted()

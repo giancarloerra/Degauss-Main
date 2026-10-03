@@ -90,7 +90,7 @@ const char *tos_get_disk_name(int);
 const char *tos_get_image_name();
 const char *tos_get_cartridge_name();
 char tos_cartridge_is_inserted();
-void tos_load_cartridge(const char *);
+bool tos_load_cartridge(const char *);
 
 void tos_config_load(int slot); // slot -1 == last config
 void tos_config_save(int slot);
