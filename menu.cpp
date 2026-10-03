@@ -1150,7 +1150,7 @@ static bool LoadLegacyMgl(mgl_struct *mgl)
 			if ((loaded = FileExists(path)))
 			{
 				tos_load_cartridge(path);
-				tos_load_cartridge(NULL);
+				loaded = tos_load_cartridge(NULL);
 			}
 			error = "Cannot open Atari ST cartridge";
 		}
@@ -1182,9 +1182,23 @@ static bool LoadLegacyMgl(mgl_struct *mgl)
 				default: error = "Invalid SharpMZ tape"; break;
 			}
 		}
-		else if (item.index == 1) sharpmz_push_filename(path);
+		else if (item.index == 1)
+		{
+			loaded = sharpmz_push_filename(path);
+			error = "Cannot queue SharpMZ tape";
+		}
 	}
-	if (loaded) mgl->state = 3;
+	if (loaded)
+	{
+		if (cfg.log_file_entry)
+		{
+			const char *name = strrchr(path, '/');
+			MakeFile("/tmp/FULLPATH", path);
+			MakeFile("/tmp/CURRENTPATH", name ? name + 1 : path);
+			MakeFile("/tmp/FILESELECT", "selected");
+		}
+		mgl->state = 3;
+	}
 	else
 	{
 		mgl->done = 1;

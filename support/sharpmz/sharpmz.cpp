@@ -470,23 +470,24 @@ void sharpmz_poll(void)
 
 // Method to push a tape filename onto the queue.
 //
-void sharpmz_push_filename(char *fileName)
+bool sharpmz_push_filename(char *fileName)
 {
-    // Locals.
-    char *ptr = (char *)malloc(strlen(fileName)+1);
-
-    if(tapeQueue.elements > MAX_TAPE_QUEUE)
+    if(tapeQueue.elements >= MAX_TAPE_QUEUE)
     {
-        free(ptr);
-    } else
-    {
-        // Copy filename into queue.
-        strcpy(ptr, fileName);
-        tapeQueue.queue[tapeQueue.elements] = ptr;
-        tapeQueue.elements++;
+        printf("SharpMZ tape queue is full\n");
+        return false;
     }
 
-    return;
+    char *ptr = (char *)malloc(strlen(fileName)+1);
+    if(!ptr)
+    {
+        printf("Cannot allocate SharpMZ tape filename\n");
+        return false;
+    }
+
+    strcpy(ptr, fileName);
+    tapeQueue.queue[tapeQueue.elements++] = ptr;
+    return true;
 }
 
 // Method to read the oldest tape filename entered and return it.
@@ -2117,6 +2118,11 @@ short sharpmz_load_tape_to_ram(const char *tapeFile, unsigned char dstCMT)
         } else
         {
             sharpmz_debugf("Bad tape or corruption, should never be 0, actual:%d, index:%d, sizeHeader:%d", actualReadSize, i, tapeHeader.fileSize);
+            DisableFpga();
+            EnableFpga();
+            spi8(SHARPMZ_FILE_TX);
+            spi8(SHARPMZ_EOF);
+            DisableFpga();
             return(4);
         }
     }
@@ -2784,9 +2790,9 @@ void sharpmz_ui(int      idleState,    int      idle2State,    int        system
 
                 // Limit number of items in queue, makes no sense to have too many and we run out of display space.
                 //
-                if(tapeQueue.elements < MAX_TAPE_QUEUE && !fail)
+                bool queued = tapeQueue.elements < MAX_TAPE_QUEUE && !fail && sharpmz_push_filename(selectedPath);
+                if(queued)
                 {
-                    sharpmz_push_filename(selectedPath);
                     OsdSetTitle("Tape Queued", OSD_ARROW_LEFT);
 
                     OsdWrite(menuItem++, "       Tape Details", 0, 0);
@@ -2813,7 +2819,7 @@ void sharpmz_ui(int      idleState,    int      idle2State,    int        system
                     OsdWrite(menuItem++, "", 0, 0);
 
                     if(!fail)
-                        strcpy(sBuf, " Queue limit reached!");
+                        strcpy(sBuf, tapeQueue.elements >= MAX_TAPE_QUEUE ? " Queue limit reached!" : " Unable to queue tape!");
                     else
                     {
                         switch(fail)
