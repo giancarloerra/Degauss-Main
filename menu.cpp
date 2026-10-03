@@ -1169,9 +1169,9 @@ static bool LoadLegacyMgl(mgl_struct *mgl)
 			error = "Cannot mount Archimedes hard disk";
 		}
 	}
-	else if (item.type == 'F' && (item.index == 0 || item.index == 1))
+	else if (item.type == 'F' && (item.index == 1 || item.index == 2))
 	{
-		int fail = item.index ? sharpmz_read_tape_header(path) : sharpmz_load_tape_to_ram(path, 0);
+		int fail = item.index == 1 ? sharpmz_read_tape_header(path) : sharpmz_load_tape_to_ram(path, 0);
 		if (!(loaded = !fail))
 		{
 			switch (fail)
@@ -1182,7 +1182,7 @@ static bool LoadLegacyMgl(mgl_struct *mgl)
 				default: error = "Invalid SharpMZ tape"; break;
 			}
 		}
-		else if (item.index) sharpmz_push_filename(path);
+		else if (item.index == 1) sharpmz_push_filename(path);
 	}
 	if (loaded) mgl->state = 3;
 	else

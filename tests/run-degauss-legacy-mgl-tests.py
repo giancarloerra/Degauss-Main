@@ -74,7 +74,7 @@ int main() {
     loaded(1, 'F', 0, "st-cartridge-sent", 0);
     for (int i = 0; i < 2; i++) loaded(2, 'S', i, "archie-floppy", i);
     for (int i = 2; i < 4; i++) loaded(2, 'S', i, "archie-hdd", i - 2);
-    loaded(3, 'F', 0, "sharp-ram", 0);
+    loaded(3, 'F', 2, "sharp-ram", 0);
     loaded(3, 'F', 1, "sharp-queue", 1);
     auto relative = request(1, 'S', 0, "Game.st");
     assert(LoadLegacyMgl(&relative));
@@ -101,6 +101,9 @@ int main() {
     auto invalid = request(1, 'S', 4, "Disk.vhd");
     assert(LoadLegacyMgl(&invalid));
     assert(invalid.done && error == "Unsupported file type or slot");
+    auto invalid_tape_slot = request(3, 'F', 0, "Tape.mzf");
+    assert(LoadLegacyMgl(&invalid_tape_slot));
+    assert(invalid_tape_slot.done && error == "Unsupported file type or slot");
 }
 '''
 
