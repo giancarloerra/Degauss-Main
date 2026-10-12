@@ -274,6 +274,7 @@ void diskled_on();
 
 char is_minimig();
 char is_next();
+char is_falcon();
 char is_sharpmz();
 char is_menu();
 char is_x86();
@@ -300,6 +301,7 @@ char is_uneon();
 char is_atari800();
 char is_atari5200();
 char is_3do();
+char is_marty();
 
 #define HomeDir(x) user_io_get_core_path(x)
 #define CoreName user_io_get_core_name()

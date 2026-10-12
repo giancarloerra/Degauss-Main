@@ -29,7 +29,7 @@ compact_enable="$(printf '%s\n' "$framebuffer_enable" | tr -d '[:space:]')"
 # existing Direct Video update without reprogramming scaler Y/C here.
 test "$(printf '%s\n' "$compact_enable" | grep -oF 'set_vga_fb(enable);' | wc -l | tr -d '[:space:]')" -eq 1
 printf '%s\n' "$compact_enable" \
-	| grep -Fq 'if(cfg.direct_video){set_vga_fb(enable);set_yc_mode();}'
+	| grep -Fq 'if(video_is_direct()){set_vga_fb(enable);set_yc_mode();}'
 if printf '%s\n' "$compact_enable" | grep -Fq 'cfg.vga_scaler)set_yc_mode();'; then
 	exit 1
 fi

@@ -91,6 +91,8 @@ int main() {
     for (int i = 2; i < 4; i++) loaded(2, 'S', i, "archie-hdd", i - 2);
     loaded(3, 'F', 2, "sharp-ram", 0);
     loaded(3, 'F', 1, "sharp-queue", 1);
+    // The modern MZT mount stays launchable on older native-loader cores.
+    loaded(3, 'S', 0, "sharp-queue", 1);
     auto relative = request(1, 'S', 0, "Game.st");
     assert(LoadLegacyMgl(&relative));
     assert(loaded_path == "/media/fat/games/Test/Game.st");
@@ -112,6 +114,11 @@ int main() {
         assert(LoadLegacyMgl(&failed));
         assert(failed.done && !error.empty() && operation == "sharp-header");
     }
+    tape_error = 0;
+    tape_error = 2;
+    auto bad_mzt = request(3, 'S', 0, "bad.mzt");
+    assert(LoadLegacyMgl(&bad_mzt));
+    assert(bad_mzt.done && !error.empty() && operation == "sharp-header");
     tape_error = 0;
     queue_available = false;
     auto queue_full = request(3, 'F', 1, "Tape.mzf");

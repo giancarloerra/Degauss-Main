@@ -7,6 +7,38 @@ import tempfile
 
 root = Path(__file__).resolve().parents[1]
 video = (root / "video.cpp").read_text()
+
+# The released upstream recovery is limited to integer requests, not every
+# fractional request whose failed search would later round in setPLL.
+pll_start = video.index("static int findPLLpar(")
+pll_end = video.index("static void setPLL(", pll_start)
+pll_production = video[pll_start:pll_end]
+pll_checks = r'''
+#include <cassert>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+''' + pll_production + r'''
+int main() {
+    uint32_t c, m; double ko;
+    assert(findPLLpar(100.0, &c, &m, &ko, true) && ko == 0);
+    assert(pll_request_on_integer(100.0));
+    assert(findPLLpar(148.5, &c, &m, &ko, true) && ko != 0);
+    assert(!pll_request_on_integer(148.5));
+    assert(!findPLLpar(100.01, &c, &m, &ko, true));
+    assert(!pll_request_on_integer(100.01));
+    assert(!findPLLpar(100.0001, &c, &m, &ko, true));
+    assert(pll_request_on_integer(100.0001));
+    puts("Upstream integer-request PLL recovery contract passed");
+}
+'''
+with tempfile.TemporaryDirectory(prefix="degauss-pll-guard-") as temporary:
+    unit = Path(temporary) / "pll.cpp"
+    binary = Path(temporary) / "pll"
+    unit.write_text(pll_checks)
+    subprocess.run(["c++", "-std=c++14", "-Wall", "-Wextra", "-Werror", str(unit), "-o", str(binary)], check=True)
+    subprocess.run([str(binary)], check=True)
+
 start = video.index("static bool degauss_native_timing(")
 end = video.index("\n}\n", start) + 3
 production = video[start:end]
@@ -19,6 +51,8 @@ enable_start = video.index("void video_fb_enable(")
 enable_end = video.index("\n}\n", enable_start) + 3
 config_start = video.index("static void video_fb_config()\n{")
 config_end = video.index("\n}\n", config_start) + 3
+direct_start = video.index("bool video_is_direct()\n{")
+direct_end = video.index("\n}\n", direct_start) + 3
 harness = r'''
 #include <cassert>
 #include <cmath>
@@ -66,6 +100,8 @@ static uint32_t *fb_base = &framebuffer_storage;
 static bool native_active = true, menu_active = true;
 static int menu_bg = 0, menu_bgn = 1, fb_num = 0, fb_enabled = 0;
 static int fb_width = 320, fb_height = 240;
+static int con_width = 320, con_height = 240, con_crt = 0;
+static bool minimig_active = false, minimig_rtg_hdmi = false;
 static int brd_x = 0, brd_y = 0;
 static bool degauss_preset_filter = false, degauss_preset_active = false;
 static char degauss_display_mask[1024] = {};
@@ -73,12 +109,15 @@ static vmode_custom_t v_cur = {};
 static struct {
     char degauss_analog_video_mode[1024];
     int direct_video, fb_size, fb_hscale, menu_pal, vscale_border;
+    int fb_terminal, vga_scaler, forced_scandoubler;
 } cfg = {};
 static int capability = 0xD161;
 static unsigned disable_calls = 0;
 static int vga_enable = -1;
+static unsigned menu_status;
 static std::vector<uint16_t> words;
 static bool is_menu() { return menu_active; }
+static bool is_minimig() { return minimig_active; }
 static bool video_degauss_native_fb_active() { return native_active; }
 static int spi_uio_cmd_cont(int) { return capability; }
 static void spi_w(uint16_t value) { words.push_back(value); }
@@ -90,9 +129,11 @@ static void degauss_restore_preset_baseline(bool) {}
 static void setShadowMask() {}
 static void set_vga_fb(int enable) { vga_enable = enable; }
 static void set_yc_mode() {}
-static void user_io_status_set(const char *, unsigned) {}
+static void user_io_status_set(const char *bits, unsigned value) {
+    assert(!strcmp(bits, "[8:5]")); menu_status = value;
+}
 '''
-production += framebuffer + video[prepare_start:prepare_end] + video[enable_start:enable_end] + video[config_start:config_end]
+production += framebuffer + video[direct_start:direct_end] + video[prepare_start:prepare_end] + video[enable_start:enable_end] + video[config_start:config_end]
 checks = r'''
 int main() {
     vmode_custom_t mode = {};
@@ -195,6 +236,36 @@ int main() {
     cfg.menu_pal = 1;
     video_fb_config();
     assert(fb_width == 352 && fb_height == 288);
+    assert(!con_crt && con_width == 352 && con_height == 288);
+
+    // The upstream terminal gets its own dimensions, not the scaled UI's.
+    native_active = false;
+    cfg.fb_terminal = 2;
+    cfg.fb_size = 1; cfg.fb_hscale = 1;
+    v_cur.item[1] = 1920; v_cur.item[5] = 1080;
+    video_fb_config();
+    assert(fb_width == 1920 && fb_height == 1080);
+    assert(con_crt && con_width == 640 && con_height == 288);
+    cfg.forced_scandoubler = 1;
+    video_fb_config();
+    assert(con_height == 576);
+    words.clear();
+    video_fb_enable(1, 0);
+    assert(words[3] == 640 && words[4] == 576 && words[9] == 2560);
+    assert(menu_status == 0xB); // FB bit 5 and LED bits 8:6.
+    video_fb_enable(0, 0);
+    assert(menu_status == 0);
+    cfg.vga_scaler = 1;
+    video_fb_config();
+    assert(!con_crt && con_width == 1920 && con_height == 1080);
+    cfg.vga_scaler = 0;
+    cfg.direct_video = 1;
+    video_fb_config();
+    assert(!con_crt);
+    minimig_active = true; minimig_rtg_hdmi = true;
+    assert(!video_is_direct());
+    video_fb_config();
+    assert(con_crt);
     puts("Analog timing conversion passed");
 }
 '''
