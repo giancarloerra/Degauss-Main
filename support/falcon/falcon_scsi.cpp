@@ -171,7 +171,7 @@ static int mount_cue(const char *name)
 			char msf[32] = {};
 			if (sscanf(p + 5, "%d %31s", &idx, msf) != 2) continue;
 			if (idx != 1) continue;
-			if (cd.ntrk >= FCD_MAX_TRACKS) break;
+			if (cd.ntrk >= FCD_MAX_TRACKS) { printf("Falcon CD: cue has too many tracks\n"); bad = 1; break; }
 			fcd_track *t = &cd.trk[cd.ntrk++];
 			t->file  = file;
 			t->audio = cur_audio;
@@ -498,22 +498,28 @@ static int resp_read_toc(int unit, int flags, int start, uint8_t *b)
 	if (fmt == 0)
 	{
 		if (start > nt && start != 0xAA) return 0;
-		int n = 4;
+		int n = 4, total = 4;
 		for (int i = 0; i < nt; i++)
 		{
 			if (i + 1 < start) continue;
+			total += 8;
+			if (n + 8 > 496) continue;
 			uint8_t *d = b + n;
 			d[1] = t[i].audio ? 0x10 : 0x14;
 			d[2] = (uint8_t)(i + 1);
 			put_addr(d + 4, t[i].start, msf);
 			n += 8;
 		}
-		uint8_t *d = b + n;
-		d[1] = 0x14;
-		d[2] = 0xAA;
-		put_addr(d + 4, leadout, msf);
-		n += 8;
-		put16(b, n - 2);
+		if (n + 8 <= 496)
+		{
+			uint8_t *d = b + n;
+			d[1] = 0x14;
+			d[2] = 0xAA;
+			put_addr(d + 4, leadout, msf);
+			n += 8;
+		}
+		// Report the complete available TOC even when the mailbox holds only a prefix.
+		put16(b, total + 8 - 2);
 		b[2] = 1;
 		b[3] = (uint8_t)nt;
 		return n;

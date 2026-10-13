@@ -770,41 +770,59 @@ int FileSave(const char *name, void *pBuffer, int size)
 {
 	make_fullpath(name);
 
-	// write a temp file and rename it over the target, so a power cut never leaves a truncated file
+	struct stat previous;
+	bool existing = !lstat(full_path, &previous);
+	if (!existing && errno != ENOENT)
+	{
+		printf("FileSave error: cannot inspect %s (%s).\n", full_path, strerror(errno));
+		return 0;
+	}
+	// Linked targets retain the previous write-through semantics and inode.
+	// Ordinary targets keep the released sibling-temp replacement.
+	bool linked = existing && (S_ISLNK(previous.st_mode) || previous.st_nlink > 1);
 	char tmp_path[sizeof(full_path) + 4];
 	snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", full_path);
+	const char *write_path = linked ? full_path : tmp_path;
 
-	int fd = open(tmp_path, O_WRONLY | O_CREAT | O_TRUNC | O_SYNC, S_IRWXU | S_IRWXG | S_IRWXO);
+	int fd = open(write_path, O_WRONLY | O_CREAT | O_TRUNC | O_SYNC, S_IRWXU | S_IRWXG | S_IRWXO);
 	if (fd < 0)
 	{
-		printf("FileSave error: cannot open %s (%s).\n", tmp_path, strerror(errno));
+		printf("FileSave error: cannot open %s (%s).\n", write_path, strerror(errno));
+		return 0;
+	}
+	if (existing && !linked &&
+		(fchown(fd, previous.st_uid, previous.st_gid) || fchmod(fd, previous.st_mode & 07777)))
+	{
+		printf("FileSave error: cannot preserve attributes of %s (%s).\n", full_path, strerror(errno));
+		close(fd);
+		unlink(tmp_path);
 		return 0;
 	}
 
 	int ret = write(fd, pBuffer, size);
 	if (ret < 0)
 	{
-		printf("FileSave error: write to %s failed (%s).\n", tmp_path, strerror(errno));
+		printf("FileSave error: write to %s failed (%s).\n", write_path, strerror(errno));
 		close(fd);
-		unlink(tmp_path);
+		if (!linked) unlink(tmp_path);
 		return 0;
 	}
 	if (ret != size)
 	{
-		printf("FileSave error: short write to %s, wrote %d of %d bytes.\n", tmp_path, ret, size);
+		printf("FileSave error: short write to %s, wrote %d of %d bytes.\n", write_path, ret, size);
 		close(fd);
-		unlink(tmp_path);
+		if (!linked) unlink(tmp_path);
 		return 0;
 	}
 
 	if (close(fd))
 	{
-		printf("FileSave error: close %s failed (%s).\n", tmp_path, strerror(errno));
-		unlink(tmp_path);
+		printf("FileSave error: close %s failed (%s).\n", write_path, strerror(errno));
+		if (!linked) unlink(tmp_path);
 		return 0;
 	}
 
-	if (rename(tmp_path, full_path))
+	if (!linked && rename(tmp_path, full_path))
 	{
 		printf("FileSave error: rename to %s failed (%s).\n", full_path, strerror(errno));
 		unlink(tmp_path);

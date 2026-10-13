@@ -173,7 +173,7 @@ static int mount_cue(const char *name)
 		}
 		else if (!strncasecmp(line, "TRACK", 5))
 		{
-			if (t->last >= 99) break;
+			if (t->last >= 99) { printf("Sun CD: cue has too many tracks\n"); bad = 1; break; }
 			cur_type = -1; cur_m2 = 0; cur_ss = 0; index0 = -1;
 			if      (strcasestr(line, "AUDIO"))      { cur_type = TT_CDDA;  cur_ss = 2352; }
 			else if (strcasestr(line, "MODE1/2352")) { cur_type = TT_MODE1; cur_ss = 2352; }

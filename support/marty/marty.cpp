@@ -866,7 +866,7 @@ static int hdd_save(const char *path, uint32_t total)
 }
 
 // <dir>/<cd name or blank>[_n].<ext>, never an existing file
-static void new_image_path(char *out, size_t size, const char *ext, int slot)
+static int new_image_path(char *out, size_t size, const char *ext, int slot)
 {
 	char dir[1024];
 	const char *last = (slot == MARTY_SLOT_HDD || slot == MARTY_SLOT_HDD2) ? GetIdx_S(slot) : ((slot == MARTY_SLOT_FDD || slot == MARTY_SLOT_FDD2) && cd_name[0]) ? GetIdx_S(MARTY_SLOT_CD) : "";
@@ -881,8 +881,9 @@ static void new_image_path(char *out, size_t size, const char *ext, int slot)
 	{
 		if (n == 1) snprintf(out, size, "%s/%s.%s", dir, base, ext);
 		else snprintf(out, size, "%s/%s_%d.%s", dir, base, n, ext);
-		if (!FileExists(out)) return;
+		if (!FileExists(out)) return 1;
 	}
+	return 0;
 }
 
 static void card_path(char *out)
@@ -982,7 +983,7 @@ static void create_image(int bit, int size_code)
 	if (bit == 0 || bit == 7)
 	{
 		int slot = (bit == 0) ? MARTY_SLOT_FDD : MARTY_SLOT_FDD2;
-		new_image_path(path, sizeof(path), "d88", slot);
+		if (!new_image_path(path, sizeof(path), "d88", slot)) { Info("No unused image filename", 3000); return; }
 		if (!save_blank_floppy(path)) { Info("Floppy image not created", 3000); return; }
 		snprintf(msg, sizeof(msg), "New floppy mounted:\n%s", path);
 		Info(msg, 3000);
@@ -991,7 +992,7 @@ static void create_image(int bit, int size_code)
 	}
 	else if (bit == 1)
 	{
-		new_image_path(path, sizeof(path), "icm", MARTY_SLOT_CARD);
+		if (!new_image_path(path, sizeof(path), "icm", MARTY_SLOT_CARD)) { Info("No unused image filename", 3000); return; }
 		const std::vector<uint8_t> &img = card_image(CARD_KB);
 		if (!FileSave(path, (void *)img.data(), img.size())) { Info("IC card not created", 3000); return; }
 		snprintf(msg, sizeof(msg), "New IC card mounted:\n%s", path);
@@ -1002,7 +1003,7 @@ static void create_image(int bit, int size_code)
 	else if (bit == 2 || bit == 9)
 	{
 		int slot = (bit == 2) ? MARTY_SLOT_HDD : MARTY_SLOT_HDD2;
-		new_image_path(path, sizeof(path), "vhd", slot);
+		if (!new_image_path(path, sizeof(path), "vhd", slot)) { Info("No unused image filename", 3000); return; }
 		Info("Creating hard disk image...", 60000);
 		if (!hdd_save(path, hdd_blocks[size_code & 1])) { Info("Hard disk not created", 3000); return; }
 		snprintf(msg, sizeof(msg), "New hard disk mounted:\n%s", path);

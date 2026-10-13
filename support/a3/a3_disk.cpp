@@ -114,7 +114,8 @@ static const char *mount_block(int index, fileTYPE *f, const uint8_t *head, cons
 	if (!off) return NULL;  // raw po/hdv: generic path serves it
 	g[index].mode = MODE_BLOCK;
 	g[index].off = off;
-	g[index].readonly = !*writable;
+	g[index].readonly = !*writable || dc42;
+	*writable = !g[index].readonly;
 	f->size = payload;
 	return NULL;
 }
@@ -258,7 +259,7 @@ static void store_pending(int disk, fileTYPE *f)
 		if (FileSeek(f, g[disk].off + (int64_t)t * A2_NIB_TRACK_SIZE, SEEK_SET)) FileWriteAdv(f, nibtrk, A2_NIB_TRACK_SIZE);
 		return;
 	}
-	if (!found) return;
+	if (found != 16) return;
 	if (g[disk].prodos) a2_dos_track_to_prodos(out, trk);
 	else memcpy(out, trk, A2_TRACK_SIZE);
 	// one write per track, 16 sector writes with O_SYNC are too slow for SOS formatter

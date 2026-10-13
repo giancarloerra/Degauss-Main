@@ -25,6 +25,8 @@ int main(int argc, char **argv) {
     assert(size);
     uint8_t decoded[A2_TRACK_SIZE] = {}, volumes[16];
     if (!strcmp(argv[1], "healthy")) {
+        A2SectorOrder order = a2_detect_525_order(disk.data(), disk.size());
+        assert(order == A2_ORDER_UNKNOWN || order == A2_ORDER_DOS || order == A2_ORDER_PRODOS);
         std::vector<uint8_t> nib(A2_NIB_IMAGE_SIZE);
         for (int t = 0; t < A2_TRACKS_525; ++t) {
             assert(a3_decode_track(woz.data(), size, t, decoded, volumes) == 16);

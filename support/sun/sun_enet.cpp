@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "../../user_io.h"
+#include "../../hardware.h"
 #include "../../shmem.h"
 #include "sun.h"
 #include "sun_enet.h"
@@ -237,15 +238,18 @@ void sun_enet_poll(void)
 	}
 
 	int mode = mode_from_status();
+	static unsigned long retry_at = 0;
 	if (mode != cur_mode)
 	{
 		cur_mode = mode;
 		if (mode == MODE_OFF) close_link();
 		else open_link(mode);
+		retry_at = mode == MODE_OFF || link_open ? 0 : GetTimer(1000);
 	}
-	else if (mode != MODE_OFF && !link_open)
+	else if (mode != MODE_OFF && !link_open && (!retry_at || CheckTimer(retry_at)))
 	{
 		open_link(mode);
+		retry_at = link_open ? 0 : GetTimer(1000);
 	}
 
 	// TX: guest to host

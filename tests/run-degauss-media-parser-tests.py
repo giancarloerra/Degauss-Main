@@ -83,7 +83,7 @@ static void cue(const std::string &path, int count, bool repeat_index) {
     fputs("FILE \"disc.bin\" BINARY\n", f);
     for (int i = 0; i < count; ++i) {
         if (!repeat_index || i == 0) fprintf(f, "TRACK %02d MODE1/2048\n", i + 1);
-        fprintf(f, "INDEX 01 00:00:%02d\n", i % 75);
+        fprintf(f, "INDEX 01 00:%02d:%02d\n", i / 75, i % 75);
     }
     fclose(f);
 }
@@ -100,10 +100,166 @@ int main(int argc, char **argv) {
     cue(path, 101, true);
     assert(mount_cue(path.c_str()) == SUN_CDROM_REJECT);
     assert(cd.toc.last == 0 && open_files == 0);
+    // Distinct TRACK declarations must reject the same unsupported overflow.
+    cue(path, 100, false);
+    assert(mount_cue(path.c_str()) == SUN_CDROM_REJECT);
+    assert(cd.toc.last == 0 && open_files == 0);
+}
+'''
+
+falcon = (ROOT / "support/falcon/falcon_scsi.cpp").read_text()
+falcon_header = (ROOT / "support/falcon/falcon_scsi.h").read_text()
+falcon_code = files + "\n".join(line for line in falcon_header.splitlines() if line.startswith("#define FALCON_SCSI_")) + "\n"
+falcon_code += falcon[falcon.index("#define FCD_MAX_TRACKS"):falcon.index("static fileTYPE       *unit_img")]
+falcon_code += 'static fileTYPE *unit_img[FALCON_SCSI_UNITS];\n'
+falcon_code += falcon[falcon.index("static void put16("):falcon.index("static int slot_unit(")]
+falcon_code += "\n".join(function(falcon, signature) for signature in (
+    "static void cd_close(", "static uint32_t msf_frames(", "static const char *skip_ws(",
+    "static uint32_t data_offset(", "static uint32_t file_frames(", "static int mount_cue(",
+    "static uint64_t image_size(", "static int disc_tracks(", "static void put_addr(", "static int resp_read_toc(",
+))
+falcon_code += r'''
+int main(int argc, char **argv) {
+    assert(argc == 2); std::string dir = argv[1], path = dir + "/falcon.cue";
+    write_file(dir + "/disc.bin", std::vector<uint8_t>(2048 * 150, 0x5a));
+    for (int count : {1, 60, 61, 99, 100}) {
+        FILE *f = fopen(path.c_str(), "wb"); assert(f);
+        fputs("FILE \"disc.bin\" BINARY\n", f);
+        for (int i = 0; i < count; ++i)
+            fprintf(f, "TRACK %02d MODE1/2048\nINDEX 01 00:%02d:%02d\n", i + 1, i / 75, i % 75);
+        fclose(f);
+        assert(mount_cue(path.c_str()) == (count <= 99));
+        if (count <= 99) {
+            assert(cd.ntrk == count && cd.active);
+            for (int start : {0, 1, 60, 62, 98, 0xaa}) for (int flags : {0, 1}) {
+                uint8_t response[512]; memset(response, 0xc7, sizeof(response));
+                memset(response, 0, 496);
+                int length = resp_read_toc(FALCON_SCSI_CD_ID, flags, start, response);
+                if (start > count && start != 0xaa) { assert(length == 0); continue; }
+                assert(length >= 12 && length <= 496);
+                int remaining = start == 0xaa ? 0 : count - (start > 1 ? start : 1) + 1;
+                assert(get16(response) == 2u + 8u * (remaining + 1));
+                assert(response[2] == 1 && response[3] == count);
+                for (int i = 496; i < 512; ++i) assert(response[i] == 0xc7);
+                if (length == 4 + 8 * (remaining + 1)) assert(response[length - 6] == 0xaa);
+                else assert(response[length - 6] != 0xaa); // Truncated transport must not invent an early lead-out.
+            }
+            cd_close();
+        }
+        assert(cd.ntrk == 0 && !cd.active && open_files == 0);
+    }
+}
+'''
+
+a3 = (ROOT / "support/a3/a3_disk.cpp").read_text()
+a3_code = files + '#include "support/a3/a3_woz.h"\n#include "support/a2/iigs_fmt.h"\n'
+a3_code += a3[a3.index("#define SLOTS"):a3.index("static uint8_t buf")]
+a3_code += "\n".join(function(a3, signature) for signature in (
+    "static int eqi(", "static const char *mount_block(", "static void store_pending(",
+))
+a3_code += r'''
+int main(int argc, char **argv) {
+    assert(argc == 2); std::string path = std::string(argv[1]) + "/apple3.po";
+    std::vector<uint8_t> disk(A2_525_IMAGE_SIZE, 0x5a), container(disk.size() + 84);
+    assert(dc42_build(container.data(), container.size(), disk.data(), disk.size(), 0x24, "Synthetic"));
+    fileTYPE image = {}; image.size = container.size(); int writable = 1;
+    assert(!mount_block(4, &image, container.data(), "img", nullptr, 1, 0, &writable));
+    assert(!writable && g[4].readonly && g[4].off == 84 && image.size == (int64_t)disk.size());
+    // Non-DC42 block formats keep their previous write permissions.
+    TwoMG m = {}; m.format = 1; m.data_offset = 64; m.data_len = disk.size();
+    image.size = disk.size() + 64; writable = 1;
+    assert(!mount_block(4, &image, container.data(), "2mg", &m, 0, 0, &writable));
+    assert(writable && !g[4].readonly && g[4].off == 64);
+    writable = 0;
+    assert(!mount_block(4, &image, container.data(), "2mg", &m, 0, 0, &writable));
+    assert(!writable && g[4].readonly);
+
+    std::vector<uint8_t> nib(A2_NIB_IMAGE_SIZE, 0xff), woz(512 * 1024);
+    uint8_t volumes[16]; memset(volumes, 42, sizeof(volumes));
+    a3_nib_track(nib.data(), disk.data(), 0, volumes);
+    memset(nib.data() + 1024, 0xff, A2_NIB_TRACK_SIZE - 1024);
+    size_t size = a3_nib_to_woz(woz.data(), woz.size(), nib.data()); assert(size);
+    uint8_t decoded[A2_TRACK_SIZE];
+    int found = a3_decode_track(woz.data(), size, 0, decoded, volumes);
+    assert(found > 0 && found < 16);
+    for (int prodos : {0, 1}) {
+        write_file(path, disk); fileTYPE f = {}; assert(FileOpenEx(&f, path.c_str(), O_RDWR));
+        g[0].woz = woz.data(); g[0].woz_sz = size; g[0].pending = 0; g[0].prodos = prodos;
+        store_pending(0, &f);
+        std::vector<uint8_t> preserved(disk.size()); assert(FileSeek(&f, 0, SEEK_SET));
+        assert(FileReadAdv(&f, preserved.data(), preserved.size()) == (int)preserved.size());
+        assert(preserved == disk); FileClose(&f);
+    }
+    // A complete converted track still writes, including ProDOS sector ordering.
+    for (size_t i = 0; i < disk.size(); ++i) disk[i] = (i * 19 + i / 256) & 255;
+    size = a3_dsk_to_woz(woz.data(), woz.size(), disk.data(), 0, 42); assert(size);
+    for (int prodos : {0, 1}) {
+        write_file(path, std::vector<uint8_t>(disk.size(), 0x5a));
+        fileTYPE f = {}; assert(FileOpenEx(&f, path.c_str(), O_RDWR));
+        g[0].woz_sz = size; g[0].pending = 0; g[0].prodos = prodos; store_pending(0, &f);
+        uint8_t saved[A2_TRACK_SIZE], expected[A2_TRACK_SIZE];
+        assert(FileSeek(&f, 0, SEEK_SET)); assert(FileReadAdv(&f, saved, sizeof(saved)) == (int)sizeof(saved));
+        if (prodos) a2_dos_track_to_prodos(expected, disk.data()); else memcpy(expected, disk.data(), sizeof(expected));
+        assert(!memcmp(saved, expected, sizeof(saved))); FileClose(&f);
+    }
+    assert(open_files == 0);
 }
 '''
 
 marty = (ROOT / "support/marty/marty.cpp").read_text()
+marty_names = files + '#include "support/marty/marty.h"\n'
+marty_names += r'''
+static std::string home, save_dir, previous, written, notice;
+static char cd_name[256], CoreName2[] = "Synthetic";
+static int writes, mounts;
+static const uint64_t hdd_blocks[] = {1024, 2048};
+static const int CARD_KB = 256;
+#define SAVE_DIR save_dir.c_str()
+static const char *HomeDir() { return home.c_str(); }
+static const char *GetIdx_S(int) { return previous.c_str(); }
+static void FileCreatePath(const char *path) { mkdir(path, 0700); }
+static int FileExists(const char *path) { return !access(path, F_OK); }
+static void Info(const char *message, int) { notice = message; }
+static void remember(int, const char *) {}
+void marty_set_image(int, const char *) { ++mounts; }
+static int save_blank_floppy(const char *path) { written = path; ++writes; return 1; }
+static const std::vector<uint8_t> &card_image(int) { static std::vector<uint8_t> image(1); return image; }
+static int FileSave(const char *path, void *, int) { written = path; ++writes; return 1; }
+static int hdd_save(const char *path, uint64_t) { written = path; ++writes; return 1; }
+'''
+marty_names += "\n".join(function(marty, signature) for signature in (
+    "static int new_image_path(",
+    "static void create_image(",
+))
+marty_names += r'''
+int main(int argc, char **argv) {
+    assert(argc == 2); std::string root = argv[1];
+    for (int bit : {0, 7, 1, 2, 9}) {
+        home = root + "/images-" + std::to_string(bit); save_dir = home;
+        assert(!mkdir(home.c_str(), 0700)); previous = home + "/previous.img";
+        std::string folder = bit == 1 ? home + "/Synthetic" : home;
+        if (bit == 1) assert(!mkdir(folder.c_str(), 0700));
+        std::string base = bit == 7 || bit == 9 ? "blank_1" : "blank";
+        std::string extension = bit == 0 || bit == 7 ? "d88" : bit == 1 ? "icm" : "vhd";
+        writes = mounts = 0; create_image(bit, 0);
+        assert(writes == 1 && mounts == 1 && written == folder + "/" + base + "." + extension);
+        std::vector<std::string> paths;
+        for (int i = 1; i < 100; ++i) {
+            paths.push_back(folder + "/" + base + (i == 1 ? "" : "_" + std::to_string(i)) + "." + extension);
+            write_file(paths.back(), std::vector<uint8_t>(4, 0x5a));
+        }
+        writes = mounts = 0; create_image(bit, 0);
+        assert(writes == 0 && mounts == 0); // A full namespace never overwrites candidate 99.
+        assert(notice == "No unused image filename");
+        assert(!unlink(paths[41].c_str())); create_image(bit, 0);
+        assert(writes == 1 && mounts == 1 && written == paths[41]);
+        for (size_t i = 0; i < paths.size(); ++i) if (i != 41) {
+            uint8_t bytes[4]; assert(FileLoad(paths[i].c_str(), bytes, 4) == 4);
+            for (uint8_t byte : bytes) assert(byte == 0x5a);
+        }
+    }
+}
+'''
 marty_code = files + '#include "support/marty/marty.h"\n'
 marty_code += marty[marty.index("#define D88_HDR"):marty.index("static void fd_write_track(")]
 marty_code += r'''
@@ -214,15 +370,16 @@ int main() {
 '''
 
 failures = []
-for name, production in (("sun-cue", sun_code), ("marty-d88", marty_code), ("marty-cue", marty_cue), ("marty-chd-index", marty_chd)):
+for name, production in (("sun-cue", sun_code), ("falcon-cue", falcon_code), ("apple3-disk", a3_code), ("marty-names", marty_names), ("marty-d88", marty_code), ("marty-cue", marty_cue), ("marty-chd-index", marty_chd)):
     with tempfile.TemporaryDirectory(prefix="degauss-media-") as temporary:
         task_dir = Path(temporary)
         unit, binary = task_dir / "test.cpp", task_dir / "test"
         unit.write_text(production)
+        codec_sources = [str(ROOT / "support/a3/a3_woz.cpp"), str(ROOT / "support/a2/iigs_fmt.cpp")] if name == "apple3-disk" else []
         subprocess.run([
             "c++", "-std=c++14", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function",
             "-Wno-unused-variable", "-fsanitize=address,undefined", "-I", str(ROOT),
-            str(unit), "-o", str(binary),
+            str(unit), *codec_sources, "-o", str(binary),
         ], check=True)
         try:
             arguments = [] if name == "marty-chd-index" else [str(task_dir)]
