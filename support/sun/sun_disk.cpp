@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <errno.h>
 
 #include "../../hardware.h"
 #include "../../file_io.h"
@@ -29,6 +30,7 @@ struct slot
 	run           *runs;
 	int            pending;
 	unsigned long  last;
+	unsigned long  retry;
 	fileTYPE      *f;
 	dev_t          dev;
 	ino_t          ino;
@@ -38,45 +40,65 @@ struct slot
 static slot slots[SLOTS];
 static int  pending;
 
-static void flush_run(int disk, run *r)
+static int flush_run(int disk, run *r)
 {
 	slot *s = &slots[disk];
 	uint32_t len = r->len;
-	if (!len) return;
-	r->len = 0;
-	s->pending--;
-	pending--;
+	if (!len) return 1;
+	if (s->retry && !CheckTimer(s->retry)) return 0;
 	diskled_on();
 
-	int ok;
+	int ok = 0;
+	errno = 0;
 	struct stat64 st;
 	if (s->f->filp && !fstat64(fileno(s->f->filp), &st) && st.st_dev == s->dev && st.st_ino == s->ino)
 	{
+		clearerr(s->f->filp);
 		ok = FileSeek(s->f, r->off, SEEK_SET) && FileWriteAdv(s->f, r->data, len) == (int)len;
 	}
 	else
 	{
 		// slot was remounted: write to the previous image
 		int fd = open(s->path, O_WRONLY | O_SYNC | O_CLOEXEC);
-		ok = fd >= 0 && pwrite64(fd, r->data, len, r->off) == (ssize_t)len;
-		if (fd >= 0) close(fd);
+		if (fd >= 0)
+		{
+			if (!fstat64(fd, &st))
+			{
+				if (st.st_dev == s->dev && st.st_ino == s->ino) ok = pwrite64(fd, r->data, len, r->off) == (ssize_t)len;
+				else errno = ESTALE;
+			}
+			int error = errno;
+			if (close(fd) && ok) { ok = 0; error = errno; }
+			errno = error;
+		}
 	}
-	if (!ok) printf("sun_disk: write %u @ %llu to %s failed\n", len, (unsigned long long)r->off, s->path);
+	if (!ok)
+	{
+		printf("sun_disk: write %u @ %llu to %s failed: %s\n", len, (unsigned long long)r->off, s->path, strerror(errno ? errno : EIO));
+		s->retry = GetTimer(1000);
+		return 0;
+	}
+	s->retry = 0;
+	r->len = 0;
+	s->pending--;
+	pending--;
+	return 1;
 }
 
-static void flush_overlap(int disk, uint64_t off, uint64_t len, run *keep)
+static int flush_overlap(int disk, uint64_t off, uint64_t len, run *keep)
 {
-	if (!slots[disk].pending) return;
+	if (!slots[disk].pending) return 1;
 	for (int i = 0; i < RUNS; i++)
 	{
 		run *r = &slots[disk].runs[i];
-		if (r != keep && r->len && off < r->off + r->len && r->off < off + len) flush_run(disk, r);
+		if (r != keep && r->len && off < r->off + r->len && r->off < off + len && !flush_run(disk, r)) return 0;
 	}
+	return 1;
 }
 
-void sun_disk_flush(int disk)
+int sun_disk_flush(int disk)
 {
-	if (disk < 0 || disk >= SLOTS) return;
+	if (disk < 0 || disk >= SLOTS) return 1;
 	while (slots[disk].pending)
 	{
 		run *lo = 0;
@@ -85,8 +107,9 @@ void sun_disk_flush(int disk)
 			run *r = &slots[disk].runs[i];
 			if (r->len && (!lo || r->off < lo->off)) lo = r;
 		}
-		flush_run(disk, lo);
+		if (!flush_run(disk, lo)) return 0;
 	}
+	return 1;
 }
 
 void sun_disk_poll()
@@ -125,6 +148,18 @@ static int can_buffer(int disk, fileTYPE *f, uint64_t off, int sz)
 		s->ino = st.st_ino;
 		snprintf(s->path, sizeof(s->path), "%s", f->path);
 	}
+	// Reserve room before the SPI write acknowledgement accepts new bytes.
+	run *lru = 0;
+	for (int i = 0; i < RUNS; i++)
+	{
+		run *r = &s->runs[i];
+		if (!r->len) continue;
+		if (off >= r->off && off + sz <= r->off + r->len) return 1;
+		if (off == r->off + r->len && r->len + sz <= RUN_MAX) return flush_overlap(disk, off, sz, r) ? 1 : -1;
+		if (!lru || r->last < lru->last) lru = r;
+	}
+	if (!flush_overlap(disk, off, sz, 0)) return -1;
+	if (s->pending == RUNS && !flush_run(disk, lru)) return -1;
 	return 1;
 }
 
@@ -132,7 +167,7 @@ static void stage(int disk, uint64_t off, const uint8_t *data, uint32_t sz)
 {
 	slot *s = &slots[disk];
 	unsigned long now = GetTimer(0);
-	run *free_r = 0, *lru = 0;
+	run *free_r = 0;
 
 	s->last = now;
 	for (int i = 0; i < RUNS; i++)
@@ -151,22 +186,14 @@ static void stage(int disk, uint64_t off, const uint8_t *data, uint32_t sz)
 		}
 		if (off == r->off + r->len && r->len + sz <= RUN_MAX)
 		{
-			flush_overlap(disk, off, sz, r);
 			memcpy(r->data + r->len, data, sz);
 			r->len += sz;
 			r->last = now;
 			if (r->len == RUN_MAX) flush_run(disk, r);
 			return;
 		}
-		if (!lru || r->last < lru->last) lru = r;
 	}
 
-	flush_overlap(disk, off, sz, 0);
-	if (!free_r)
-	{
-		for (int i = 0; i < RUNS; i++) if (!s->runs[i].len) { free_r = &s->runs[i]; break; }
-		if (!free_r) { flush_run(disk, lru); free_r = lru; }
-	}
 	free_r->off = off;
 	free_r->len = sz;
 	free_r->born = free_r->last = now;
@@ -186,13 +213,14 @@ int sun_disk_service(int disk, fileTYPE *f, int op, uint64_t lba, int sz, int ac
 	if (op != 2)
 	{
 		// covers the generic read buffer and its read-ahead
-		flush_overlap(disk, off, sz + 2ULL * UIO_BUFFER_SIZE, 0);
-		return 0;
+		return flush_overlap(disk, off, sz + 2ULL * UIO_BUFFER_SIZE, 0) ? 0 : 1;
 	}
 
-	if (sz > (int)sizeof(buf) || !can_buffer(disk, f, off, sz))
+	int buffered = sz > (int)sizeof(buf) ? 0 : can_buffer(disk, f, off, sz);
+	if (buffered < 0) return 1;
+	if (!buffered)
 	{
-		sun_disk_flush(disk);
+		if (!sun_disk_flush(disk)) return 1;
 		return 0;
 	}
 

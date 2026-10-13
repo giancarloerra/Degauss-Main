@@ -37,10 +37,9 @@ void sun_idprom_send(void)
 
 	memset(p, 0xFF, sizeof(p));
 	char *path = user_io_make_filepath(HomeDir(), "boot1.rom");
-	int n = FileLoad(path, 0, 0);
+	int n = FileLoad(path, p, sizeof(p));
 	if (n >= 16)
 	{
-		FileLoad(path, p, sizeof(p));
 		src = "boot1.rom";
 	}
 	else if (make_idprom(p)) src = "this MiSTer's Ethernet address";

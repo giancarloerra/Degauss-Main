@@ -42,6 +42,8 @@
 #include "frame_timer.h"
 #include "scaler.h"
 #include "support.h"
+#include "support/mac/mac_disk.h"
+#include "support/sun/sun_disk.h"
 
 static char core_path[1024] = {};
 static char rbf_path[1024] = {};
@@ -1454,8 +1456,20 @@ int user_io_get_width()
 	return fio_size;
 }
 
+int user_io_flush_images()
+{
+	int ok = 1;
+	for (unsigned disk = 0; disk < sizeof(sd_image) / sizeof(sd_image[0]); disk++)
+	{
+		if (!mac_disk_flush(disk)) ok = 0;
+		if (!sun_disk_flush(disk)) ok = 0;
+	}
+	return ok;
+}
+
 void user_io_init(const char *path, const char *xml)
 {
+	if (!user_io_flush_images()) { Info("Pending disk writes could not be saved", 5000); return; }
 	char *name;
 	static char mainpath[512];
 	core_name[0] = 0;
@@ -2193,6 +2207,7 @@ void user_io_file_info(const char *ext)
 
 int user_io_file_mount(const char *name, unsigned char index, char pre, int pre_size)
 {
+	if (!mac_disk_flush(index) || !sun_disk_flush(index)) { Info("Pending disk writes could not be saved", 5000); return 0; }
 	int writable = 0;
 	int ret = 0;
 	int len = strlen(name);

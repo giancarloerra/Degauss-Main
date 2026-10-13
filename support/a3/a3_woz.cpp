@@ -176,19 +176,28 @@ size_t a3_nib_to_woz(uint8_t *woz, size_t cap, const uint8_t *nib)
 
 static const uint8_t *woz_chunk(const uint8_t *woz, size_t size, const char *id)
 {
-	for (size_t pos = 12; pos + 8 <= size; pos += 8 + rd32(woz + pos + 4))
+	for (size_t pos = 12; pos <= size && size - pos >= 8; )
+	{
+		uint32_t len = rd32(woz + pos + 4);
+		if (len > size - pos - 8) return NULL;
 		if (!memcmp(woz + pos, id, 4)) return woz + pos + 8;
+		pos += 8 + (size_t)len;
+	}
 	return NULL;
 }
 
 static int track_nibbles(const uint8_t *woz, size_t size, int track, uint8_t *nib)
 {
-	const uint8_t *e = woz_chunk(woz, size, "TRKS") + track * 8;
+	if (track < 0) return 0;
+	const uint8_t *trks = woz_chunk(woz, size, "TRKS");
+	if (!trks || (size_t)track >= rd32(trks - 4) / 8) return 0;
+	const uint8_t *e = trks + (size_t)track * 8;
 	size_t start = (size_t)rd16(e) * 512;
 	uint32_t bits = rd32(e + 4);
+	if (!bits || start > size || ((uint64_t)bits + 7) / 8 > size - start) return 0;
 	uint8_t shift = 0;
 	int count = 0;
-	for (uint32_t i = 0; i < bits * 2 && count < NIB_CAP; ++i)
+	for (uint64_t i = 0; i < (uint64_t)bits * 2 && count < NIB_CAP; ++i)
 	{
 		uint32_t pos = i % bits;
 		shift = (shift << 1) | ((woz[start + pos / 8] >> (7 - (pos & 7))) & 1);

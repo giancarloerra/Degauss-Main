@@ -10,6 +10,6 @@ int  sun_disk_service(int disk, fileTYPE *f, int op, uint64_t lba, int sz, int a
 
 void sun_disk_poll();
 
-void sun_disk_flush(int disk);
+int sun_disk_flush(int disk);
 
 #endif

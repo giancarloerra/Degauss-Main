@@ -633,7 +633,13 @@ static void ring_poll(void)
 		snprintf(ifname, sizeof ifname, "%s", q8_iface_names[opt - 1]);
 		if (!mac_eth_iface_open(ifname)) return;
 		uint8_t hw[6] = {}, m[8] = {};
-		mac_eth_iface_hwaddr(ifname, hw);
+		const char *const from[] = { ifname, "eth0", "wlan0" };
+		for (int i = 0; i < (opt == 4 ? 3 : 1); i++)
+		{
+			memset(hw, 0, sizeof(hw));
+			if (mac_eth_iface_hwaddr(from[i], hw) && (hw[0] | hw[1] | hw[2] | hw[3] | hw[4] | hw[5])) break;
+			memset(hw, 0, sizeof(hw));
+		}
 		m[0] = MAC_OUI_0; m[1] = MAC_OUI_1; m[2] = MAC_OUI_2;
 		m[3] = hw[3]; m[4] = hw[4]; m[5] = hw[5]; m[7] = 0x80;
 		uint64_t v;
@@ -654,6 +660,7 @@ static void ring_poll(void)
 
 	uint8_t f[2048];
 	uint32_t tx_wr = (uint32_t)w[1];
+	__sync_synchronize();
 	if (tx_wr - tx_rd > 8)
 	{
 		printf("mac_eth: TX ring overrun (%u pending); overwritten slots discarded\n", tx_wr - tx_rd);
@@ -669,6 +676,7 @@ static void ring_poll(void)
 			mac_eth_iface_send(f, len);
 		}
 	}
+	__sync_synchronize();
 	w[2] = tx_rd;
 
 	uint32_t rx_rd = (uint32_t)w[4];

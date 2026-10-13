@@ -888,7 +888,7 @@ const char* get_rbf_name_bootcore(char *str)
 
 static void vga_nag(bool show_warning = true)
 {
-	if (show_warning && video_fb_state() && !(cfg.fb_terminal == 2 && !cfg.vga_scaler && !cfg.direct_video))
+	if (show_warning && video_fb_state() && !(cfg.fb_terminal == 2 && !cfg.vga_scaler && !video_is_direct()))
 	{
 		EnableOsd_on(OSD_VGA);
 		OsdSetSize(16);

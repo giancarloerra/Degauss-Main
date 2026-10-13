@@ -17,7 +17,9 @@ dependencies = r'''
 #include <cstring>
 #include <cstdlib>
 #include <sys/mman.h>
-static unsigned opt = 1, opens, closes, addresses, sends;
+static unsigned opt = 1, opens, closes, addresses, sends, barriers;
+static const char *good_iface;
+static bool zero_tap;
 static int open_ok;
 static volatile uint64_t *ring;
 static char ifname[64];
@@ -35,16 +37,36 @@ static void *shmem_map(unsigned long, unsigned long size) {
 // The production interface helper returns 0 on failure and 1 on success.
 static int mac_eth_iface_open(const char *) { ++opens; return open_ok; }
 static void mac_eth_iface_close() { ++closes; }
-static int mac_eth_iface_hwaddr(const char *, uint8_t *) { ++addresses; return 0; }
+static int mac_eth_iface_hwaddr(const char *name, uint8_t *hw) {
+    ++addresses;
+    if (zero_tap && !strcmp(name, "tap0")) return 1;
+    if (!good_iface || strcmp(name, good_iface)) return 0;
+    const uint8_t value[] = {2, 3, 4, 5, 6, 7}; memcpy(hw, value, sizeof(value)); return 1;
+}
 static const char *user_io_get_core_name() { return "MacPPC7300"; }
 static int mac_eth_iface_send(const uint8_t *, int) {
+    assert(barriers & 1); // Slot reads/sends occur after acquire and before release.
     ++sends; assert(sends <= 8); return 1;
 }
 static int mac_eth_iface_recv(uint8_t *, int) { return -1; }
+static void record_barrier() { ++barriers; }
+#define __sync_synchronize() record_barrier()
 '''
 checks = r'''
 int main(int argc, char **argv) {
     assert(argc == 2);
+    if (!strncmp(argv[1], "tap-", 4)) {
+        opt = 4; open_ok = 1;
+        if (!strcmp(argv[1], "tap-valid")) good_iface = "tap0";
+        if (!strcmp(argv[1], "tap-eth")) good_iface = "eth0";
+        if (!strcmp(argv[1], "tap-zero-wifi")) { zero_tap = true; good_iface = "wlan0"; }
+        ring_poll();
+        uint8_t published[8]; uint64_t address = ring[5]; memcpy(published, &address, sizeof(address));
+        assert(published[0] == 8 && published[1] == 0 && published[2] == 7);
+        assert(published[3] == (good_iface ? 5 : 0) && published[4] == (good_iface ? 6 : 0) && published[5] == (good_iface ? 7 : 0));
+        assert(addresses == (!strcmp(argv[1], "tap-valid") ? 1u : !strcmp(argv[1], "tap-eth") ? 2u : 3u));
+        assert(!munmap((void *)ring, RING_SIZE)); return 0;
+    }
     open_ok = strcmp(argv[1], "open-failure") != 0;
     ring_poll();
     if (!open_ok) {
@@ -55,6 +77,7 @@ int main(int argc, char **argv) {
         ring[0] = (uint64_t)RING_MAGIC << 32;
         for (unsigned slot = 0; slot < 8; ++slot) ring[0x200 + slot * 0x100] = 64;
         ring[1] = 3; ring_poll(); assert(sends == 3 && ring[2] == 3);
+        assert(barriers == 2);
         // Only the eight still-stored slots are processed after a producer overrun.
         sends = 0; ring[1] = 20; ring_poll(); assert(sends == 8 && ring[2] == 20);
         sends = 0; ring[1] = UINT32_MAX - 2; ring_poll(); assert(sends == 8 && ring[2] == UINT32_MAX - 2);
@@ -77,6 +100,6 @@ with tempfile.TemporaryDirectory(prefix="degauss-mac-ring-") as temporary:
     unit, binary = Path(temporary) / "ring.cpp", Path(temporary) / "ring"
     unit.write_text(dependencies + production + checks)
     subprocess.run(["c++", "-std=c++14", "-Wall", "-Wextra", "-Werror", "-fsanitize=address,undefined", str(unit), "-o", str(binary)], check=True)
-    for name in ("open-failure", "tx-bound"):
+    for name in ("open-failure", "tx-bound", "tap-valid", "tap-eth", "tap-zero-wifi", "tap-fixed"):
         subprocess.run([str(binary), name], check=True)
-print("Mac PPC failed-open, interface-switch, eight-slot TX and counter-wrap checks passed")
+print("Mac PPC failed-open, interface-switch, TAP address, TX ordering and eight-slot checks passed")

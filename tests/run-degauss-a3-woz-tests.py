@@ -47,6 +47,23 @@ int main(int argc, char **argv) {
         assert(!memcmp(prodos, prodos_disk.data(), A2_TRACK_SIZE));
         a2_prodos_to_dos(restored, prodos_disk.data());
         assert(!memcmp(restored, disk.data(), disk.size()));
+    } else if (!strcmp(argv[1], "malformed")) {
+        const auto valid = woz;
+        memcpy(woz.data() + 248, "MISS", 4);
+        assert(a3_decode_track(woz.data(), size, 0, decoded, volumes) == 0);
+        woz = valid;
+        set32(woz.data() + 16, UINT32_MAX);
+        assert(a3_decode_track(woz.data(), size, 0, decoded, volumes) == 0);
+        woz = valid;
+        assert(a3_decode_track(woz.data(), size, -1, decoded, volumes) == 0);
+        assert(a3_decode_track(woz.data(), size, INT32_MAX, decoded, volumes) == 0);
+        set32(woz.data() + 252, 7);
+        assert(a3_decode_track(woz.data(), 263, 0, decoded, volumes) == 0);
+        woz = valid; woz[256] = woz[257] = 0xff;
+        assert(a3_decode_track(woz.data(), size, 0, decoded, volumes) == 0);
+        woz = valid; set32(woz.data() + 260, UINT32_MAX);
+        assert(a3_decode_track(woz.data(), size, 0, decoded, volumes) == 0);
+        assert(a3_decode_track(woz.data(), 11, 0, decoded, volumes) == 0);
     } else {
         // A rewritten track without an address field must not run beyond decoded bytes.
         bool long_track = !strcmp(argv[1], "long-empty");
@@ -69,6 +86,6 @@ with tempfile.TemporaryDirectory(prefix="degauss-a3-woz-") as temporary:
         str(ROOT / "support/a3/a3_woz.cpp"), str(ROOT / "support/a2/iigs_fmt.cpp"),
         "-o", str(binary),
     ], check=True)
-    for case in ("healthy", "empty", "long-empty"):
+    for case in ("healthy", "empty", "long-empty", "malformed"):
         subprocess.run([str(binary), case], check=True, timeout=15)
 print("Apple III DSK/NIB round-trip, linked sector-order APIs and empty-track bounds passed")

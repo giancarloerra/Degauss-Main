@@ -16,6 +16,7 @@
 #include "menu.h"
 #include "shmem.h"
 #include "offload.h"
+#include "user_io.h"
 
 #include "fpga_base_addr_ac5.h"
 #include "fpga_manager.h"
@@ -434,6 +435,7 @@ static int make_env(const char *name, const char *cfg)
 
 int fpga_load_rbf(const char *name, const char *cfg, const char *xml)
 {
+	if (!user_io_flush_images()) { Info("Pending disk writes could not be saved", 5000); return -1; }
 	OsdDisable();
 	static char path[1024];
 	int ret = 0;
@@ -634,6 +636,7 @@ char *getappname()
 
 void app_restart(const char *path, const char *xml, const char *exe)
 {
+	if (!user_io_flush_images()) { Info("Pending disk writes could not be saved", 5000); return; }
 	sync();
 	fpga_core_reset(1);
 

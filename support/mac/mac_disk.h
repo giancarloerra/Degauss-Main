@@ -10,6 +10,6 @@ int  mac_disk_service(int disk, fileTYPE *f, int op, uint64_t lba, int sz, int a
 
 void mac_disk_poll();
 
-void mac_disk_flush(int disk);
+int mac_disk_flush(int disk);
 
 #endif
