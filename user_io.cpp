@@ -42,6 +42,8 @@
 #include "frame_timer.h"
 #include "scaler.h"
 #include "support.h"
+#include "support/mac/mac_disk.h"
+#include "support/sun/sun_disk.h"
 
 static char core_path[1024] = {};
 static char rbf_path[1024] = {};
@@ -300,6 +302,11 @@ static char rtc_is_utc()
 	return is_next();
 }
 
+char is_falcon()
+{
+	return !strcasecmp(orig_name, "Falcon");
+}
+
 static int is_minimig_type = 0;
 char is_minimig()
 {
@@ -423,6 +430,13 @@ char is_electron()
 	return (is_electron_type == 1);
 }
 
+static int is_marty_type = 0;
+char is_marty()
+{
+	if (!is_marty_type) is_marty_type = strcasecmp(orig_name, "Marty") ? 2 : 1;
+	return (is_marty_type == 1);
+}
+
 static int is_saturn_type = 0;
 char is_saturn()
 {
@@ -487,6 +501,7 @@ void user_io_read_core_name()
 	is_pcxt_type = 0;
 	is_electron_type = 0;
 	is_saturn_type = 0;
+	is_marty_type = 0;
 	is_n64_type = 0;
 	is_uneon_type = 0;
 	core_name[0] = 0;
@@ -1022,6 +1037,10 @@ static void parse_config()
 						game_docs_init(str, 0);
 						cheats_init(str, 0);
 					}
+					else if (is_marty())
+					{
+						marty_set_image(idx, str);
+					}
 					else
 					{
 						if (!is_c128()) user_io_set_index((user_io_ext_idx(str, ext) << 6) | idx);
@@ -1437,8 +1456,20 @@ int user_io_get_width()
 	return fio_size;
 }
 
+int user_io_flush_images()
+{
+	int ok = 1;
+	for (unsigned disk = 0; disk < sizeof(sd_image) / sizeof(sd_image[0]); disk++)
+	{
+		if (!mac_disk_flush(disk)) ok = 0;
+		if (!sun_disk_flush(disk)) ok = 0;
+	}
+	return ok;
+}
+
 void user_io_init(const char *path, const char *xml)
 {
+	if (!user_io_flush_images()) { Info("Pending disk writes could not be saved", 5000); return; }
 	char *name;
 	static char mainpath[512];
 	core_name[0] = 0;
@@ -1453,6 +1484,7 @@ void user_io_init(const char *path, const char *xml)
 
 	// Same for the NeXT ethernet bridge.
 	next_enet_stop();
+	sun_enet_stop();
 
 	// we need to set the directory to where the XML file (MRA) is
 	// not the RBF. The RBF will be in arcade, which the user shouldn't
@@ -1614,6 +1646,8 @@ void user_io_init(const char *path, const char *xml)
 				// a branch of the chain below, or the core skips the boot
 				// ROM load at its end and comes up with no ROM at all.
 				if (is_next()) next_enet_start();
+				// before the boot ROMs: the Sun-2's ID PROM goes in while it is held in reset
+				if (is_sun_family()) sun_enet_start();
 
 				if (xml && isXmlName(xml) == 1)
 				{
@@ -1650,6 +1684,7 @@ void user_io_init(const char *path, const char *xml)
 
 					if (is_uneon()) x86_ide_set();
 					if (is_cdi()) cdi_load_root_nvram();
+					if (is_marty()) marty_init();
 
 					if (!strlen(path) || !user_io_file_tx(path, 0, 0, 0, 1))
 					{
@@ -1747,6 +1782,7 @@ void user_io_init(const char *path, const char *xml)
 		}
 
 		send_rtc(3);
+		if (is_marty() && xml && isXmlName(xml) == 2) marty_mgl_premount();
 
 		// release reset
 		if (!is_minimig() && !is_st()) user_io_status_set("[0]", 0);
@@ -2070,7 +2106,6 @@ int process_ss(const char *rom_name, int enable)
 	if (ss_timer && !CheckTimer(ss_timer)) return 0;
 	ss_timer = GetTimer(1000);
 
-	fileTYPE f = {};
 	for (int i = 0; i < 4; i++)
 	{
 		if (base[i])
@@ -2088,16 +2123,8 @@ int process_ss(const char *rom_name, int enable)
 					Info("Saving the state", 500);
 
 					*ss_sufx = i + '1';
-					if (FileOpenEx(&f, ss_name, O_CREAT | O_TRUNC | O_RDWR | O_SYNC))
-					{
-						int ret = FileWriteAdv(&f, base[i], size);
-						FileClose(&f);
-						printf("Wrote %d bytes to file: %s\n", ret, ss_name);
-					}
-					else
-					{
-						printf("Unable to create file: %s\n", ss_name);
-					}
+					int ret = FileSave(ss_name, base[i], size);
+					if (ret) printf("Wrote %d bytes to file: %s\n", ret, ss_name);
 				}
 			}
 		}
@@ -2180,6 +2207,7 @@ void user_io_file_info(const char *ext)
 
 int user_io_file_mount(const char *name, unsigned char index, char pre, int pre_size)
 {
+	if (!mac_disk_flush(index) || !sun_disk_flush(index)) { Info("Pending disk writes could not be saved", 5000); return 0; }
 	int writable = 0;
 	int ret = 0;
 	int len = strlen(name);
@@ -2273,7 +2301,13 @@ int user_io_file_mount(const char *name, unsigned char index, char pre, int pre_
 
 				// Mac CD slot: CUE/CHD/raw image translation (support/mac)
 				if (ret) ret = mac_mount_hook(index, name, &sd_image[index], &writable);
+				// Sun CD slot: CUE/CHD/raw image translation (support/sun)
+				if (ret) ret = sun_mount_hook(index, name, &sd_image[index], &writable);
 			if (ret) ret = next_mount_hook(index, name, &sd_image[index], &writable);
+				if (ret) ret = a3_mount_hook(index, name, &sd_image[index], &writable);
+
+				// Falcon SCSI slots: image registration, CD cue/bin translation (support/falcon)
+				if (ret) ret = falcon_scsi_mount_hook(index, name, &sd_image[index], &writable);
 
 				if (ret && is_c128())
 				{
@@ -2293,7 +2327,10 @@ int user_io_file_mount(const char *name, unsigned char index, char pre, int pre_
 		FileClose(&sd_image[index]);
 		c64_closeGCR(index);
 		mac_cdrom_unmount(index);
+		sun_unmount(index);
 		next_unmount(index);
+		a3_unmount(index);
+		falcon_scsi_unmount(index);
 	}
 
 	buffer_lba[index] = -1;
@@ -3174,8 +3211,8 @@ void user_io_send_buttons(char force)
 	if (cfg.dvi_mode == 1) map |= CONF_DVI;
 	if (cfg.hdmi_limited & 1) map |= CONF_HDMI_LIMITED1;
 	if (cfg.hdmi_limited & 2) map |= CONF_HDMI_LIMITED2;
-	if (cfg.direct_video) map |= CONF_DIRECT_VIDEO;
-	if (cfg.direct_video == 2) map |= CONF_DIRECT_VIDEO2;
+	if (video_is_direct()) map |= CONF_DIRECT_VIDEO;
+	if (video_is_direct() && cfg.direct_video == 2) map |= CONF_DIRECT_VIDEO2;
 	if (vga_fb) map |= CONF_VGA_FB;
 
 	if ((map != key_map) || force)
@@ -3295,6 +3332,7 @@ void user_io_poll()
 	user_io_send_buttons(0);
 
 	mac_poll();   // Mac SCSI family: Toolbox slot announce + deferred CD work
+	sun_poll();   // Sun SCSI family: write-buffer flushes
 
 	if (is_minimig())
 	{
@@ -3337,6 +3375,7 @@ void user_io_poll()
 	}
 
 	next_enet_poll();
+	sun_enet_poll();
 
 	// The NeXT keeps a battery backed clock that the guest reads at
 	// boot; the one-shot update at core load is not enough if the core
@@ -3396,6 +3435,8 @@ void user_io_poll()
 					blksz = CDI_CDIC_BUFFER_SIZE;
 				else if (mac_cdda_window(disk, lba))
 					blksz = 2352;   // Mac CD-DA: one whole frame per transaction
+				else if (is_marty())
+					blksz = marty_block_size(disk, 128 << ((c >> 6) & 7));
 				else
 					blksz = 128 << ((c >> 6) & 7);
 
@@ -3465,7 +3506,7 @@ void user_io_poll()
 				else if (op & 1) iigs_read(disk, &sd_image[disk], lba, ack);
 				else break;
 			}
-			else if (int macop = mac_sd_service(disk, op, lba, sz, ack))
+			else if (int macop = mac_sd_service(disk, &sd_image[disk], op, lba, sz, ack))
 			{
 				// Mac Toolbox/CD slots (support/mac); SPI is done by the hook.
 				if (macop < 0) break;
@@ -3473,6 +3514,24 @@ void user_io_poll()
 			else if (int nxop = next_sd_service(disk, op, (uint32_t)lba, sz, ack))
 			{
 				if (nxop < 0) break;
+			}
+			else if (int sunop = sun_sd_service(disk, &sd_image[disk], op, lba, sz, ack))
+			{
+				// Sun disk write buffer and CD slot (support/sun); SPI is done by the hook.
+				if (sunop < 0) break;
+			}
+			else if (int mop = marty_sd_service(disk, op, (uint32_t)lba, sz, ack))
+			{
+				if (mop < 0) break;
+      }
+			else if (int a3op = a3_sd_service(disk, &sd_image[disk], op, lba, sz, ack))
+			{
+				if (a3op < 0) break;
+			}
+			else if (int falop = falcon_sd_service(disk, op, lba, sz, ack))
+			{
+				// Falcon SCSI response windows / translated CD (support/falcon); SPI is done by the hook.
+				if (falop < 0) break;
 			}
 			else if ((blks == G64_BLOCK_COUNT_1541+1 || blks == G64_BLOCK_COUNT_1571+1) && sd_type[disk]==SD_TYPE_C64)
 			{
@@ -3966,6 +4025,7 @@ void user_io_poll()
 	if (is_megacd()) mcd_poll();
 	if (is_pce()) pcecd_poll();
 	if (is_saturn()) saturn_poll();
+	if (is_marty()) marty_poll();
 	if (is_cdi()) cdi_poll();
 	if (is_psx()) psx_poll();
 	if (is_neogeo_cd()) neocd_poll();
