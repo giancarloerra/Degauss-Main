@@ -106,6 +106,80 @@ inline ConfigLoadResult classify_config(bool file_exists, uint32_t file_size,
 	return CONFIG_VALID;
 }
 
+// Version 1 remains readable, but its retired controller byte never enables
+// the new hold gesture. Version 2 stores the physical Linux button code.
+struct ConfigV2
+{
+	uint32_t magic;
+	uint16_t version;
+	uint16_t size;
+	uint16_t keyboard_key;
+	uint16_t controller_button;
+	uint32_t reserved;
+	uint32_t sentinel;
+};
+
+static_assert(sizeof(ConfigV2) == 20, "Degauss hold shortcut config must remain stable");
+static_assert(offsetof(ConfigV2, controller_button) == 10, "Controller offset changed");
+
+inline bool valid_controller_button(uint16_t button)
+{
+	return !button
+		|| (button >= PRIMARY_BUTTON_FIRST && button <= PRIMARY_BUTTON_LAST)
+		|| (button >= DPAD_BUTTON_FIRST && button <= DPAD_BUTTON_LAST)
+		|| (button >= TRIGGER_BUTTON_FIRST && button <= TRIGGER_BUTTON_LAST);
+}
+
+inline ConfigV2 make_hold_config(uint16_t keyboard_key, uint16_t controller_button)
+{
+	return { CONFIG_MAGIC, 2, static_cast<uint16_t>(sizeof(ConfigV2)),
+		keyboard_key, controller_button, 0, CONFIG_SENTINEL };
+}
+
+inline bool config_valid(const ConfigV2 &config)
+{
+	return config.magic == CONFIG_MAGIC && config.version == 2
+		&& config.size == sizeof(ConfigV2)
+		&& valid_keyboard_key(config.keyboard_key)
+		&& valid_controller_button(config.controller_button)
+		&& config.reserved == 0 && config.sentinel == CONFIG_SENTINEL;
+}
+
+constexpr uint32_t CONTROLLER_HOLD_MS = 5000;
+
+struct ControllerHoldState
+{
+	bool down = false;
+	bool fired = false;
+	uint32_t pressed_at = 0;
+
+	void reset()
+	{
+		down = fired = false;
+		pressed_at = 0;
+	}
+
+	void event(int value, bool eligible, uint32_t now)
+	{
+		if (!value || !eligible) reset();
+		else if (value == 1 && !down)
+		{
+			down = true;
+			fired = false;
+			pressed_at = now;
+		}
+	}
+
+	bool poll(bool eligible, uint32_t now)
+	{
+		if (!eligible) reset();
+		if (!down || fired || static_cast<uint32_t>(now - pressed_at) < CONTROLLER_HOLD_MS)
+			return false;
+		fired = true;
+		return true;
+	}
+};
+
 struct RuntimeConditions
 {
 	bool frontend_available;

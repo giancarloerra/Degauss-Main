@@ -57,6 +57,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 // the framebuffer terminal.
 static bool degauss_running = false;
 static bool degauss_shortcut_save_failed = false;
+static bool degauss_controller_capture = false;
 #include "user_io.h"
 #include "debug.h"
 #include "fpga_io.h"
@@ -1709,6 +1710,7 @@ void HandleUI(void)
 		break;
 	}
 
+	degauss_shortcut_poll_controllers();
 	if (degauss_shortcut_take_request())
 	{
 		fpga_load_rbf("menu.rbf");
@@ -3363,11 +3365,15 @@ void HandleUI(void)
 			}
 			else
 			{
-				menumask = 0x3;
+				menumask = 0x7;
 				const uint16_t key = degauss_shortcut_keyboard_key();
 				if (key) snprintf(s, sizeof(s), " Keyboard: key code %u", key);
 				else snprintf(s, sizeof(s), " Keyboard: Off");
 				MenuWrite(n++, s, menusub == 0);
+				const uint16_t button = degauss_shortcut_controller_button();
+				if (button) snprintf(s, sizeof(s), " Controller: button %u (5s)", button);
+				else snprintf(s, sizeof(s), " Controller: Off");
+				MenuWrite(n++, s, menusub == 1);
 
 				MenuWrite(n++);
 				MenuWrite(n++, " A: Capture   X: Disable", 0, 1);
@@ -3376,7 +3382,7 @@ void HandleUI(void)
 					MenuWrite(n++, " Save failed", 0, 1);
 				}
 				while (n < OsdGetSize() - 1) MenuWrite(n++);
-				MenuWrite(n++, STD_BACK, menusub == 1, 0, OSD_ARROW_LEFT);
+				MenuWrite(n++, STD_BACK, menusub == 2, 0, OSD_ARROW_LEFT);
 			}
 		}
 		break;
@@ -3407,17 +3413,25 @@ void HandleUI(void)
 				break;
 			}
 
-			if (c == KEY_TAB && menusub == 0)
+			if (c == KEY_TAB && menusub < 2)
 			{
-				degauss_shortcut_save_failed = !degauss_shortcut_set_keyboard(0);
+				degauss_shortcut_save_failed = menusub == 0
+					? !degauss_shortcut_set_keyboard(0) : !degauss_shortcut_set_controller(0);
 				menustate = MENU_DEGAUSS_SHORTCUT1;
 			}
 			else if (select && menusub == 0)
 			{
+				degauss_controller_capture = false;
 				degauss_shortcut_begin_keyboard_capture();
 				menustate = MENU_DEGAUSS_SHORTCUT_CAPTURE1;
 			}
 			else if (select && menusub == 1)
+			{
+				degauss_controller_capture = true;
+				degauss_shortcut_begin_controller_capture();
+				menustate = MENU_DEGAUSS_SHORTCUT_CAPTURE1;
+			}
+			else if (select && menusub == 2)
 			{
 				menustate = MENU_COMMON1;
 				menusub = DEGAUSS_SHORTCUT_MENUSUB;
@@ -3430,11 +3444,11 @@ void HandleUI(void)
 			firstmenu = 0;
 			menumask = 0;
 			OsdSetSize(16);
-			OsdSetTitle("Keyboard shortcut", 0);
+			OsdSetTitle(degauss_controller_capture ? "Controller shortcut" : "Keyboard shortcut", 0);
 			MenuWrite(0, "");
-			MenuWrite(1, " Press one keyboard key");
+			MenuWrite(1, degauss_controller_capture ? " Press one controller button" : " Press one keyboard key");
 			MenuWrite(2, "");
-			MenuWrite(3, " Pad Menu/B: cancel", 0, 1);
+			MenuWrite(3, degauss_controller_capture ? " Keyboard Esc: cancel" : " Pad Menu/B: cancel", 0, 1);
 			for (int n = 4; n < OsdGetSize(); n++) MenuWrite(n, "");
 			menustate = MENU_DEGAUSS_SHORTCUT_CAPTURE2;
 		}
@@ -3445,16 +3459,18 @@ void HandleUI(void)
 		{
 			degauss_shortcut_cancel_keyboard_capture();
 			menustate = MENU_DEGAUSS_SHORTCUT1;
-			menusub = 0;
+			menusub = degauss_controller_capture ? 1 : 0;
 		}
 		else
 		{
 			uint16_t key = 0;
-			if (degauss_shortcut_take_keyboard_capture(&key))
+			if (degauss_controller_capture ? degauss_shortcut_take_controller_capture(&key)
+				: degauss_shortcut_take_keyboard_capture(&key))
 			{
-				degauss_shortcut_save_failed = !degauss_shortcut_set_keyboard(key);
+				degauss_shortcut_save_failed = degauss_controller_capture
+					? !degauss_shortcut_set_controller(key) : !degauss_shortcut_set_keyboard(key);
 				menustate = MENU_DEGAUSS_SHORTCUT1;
-				menusub = 0;
+				menusub = degauss_controller_capture ? 1 : 0;
 			}
 		}
 		break;

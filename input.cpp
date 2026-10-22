@@ -3001,6 +3001,12 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 	{
 		return;
 	}
+	if (!menu_event && ev->type == EV_KEY
+		&& degauss_shortcut_logic::valid_controller_button(ev->code)
+		&& degauss_shortcut_handle_controller_event(sub_dev, ev->code, ev->value))
+	{
+		return;
+	}
 
 	if (ev->type == EV_KEY && ev->code < 256 && !(mapping && mapping_type == 2) && !input[dev].force_joy)
 	{
@@ -4859,6 +4865,7 @@ int process_joycon(int dev, input_event *ev, input_absinfo *absinfo)
 			led_path = get_led_path(r); if (led_path) set_led(led_path, ":combo", id);
 
 			printf("Close all devices.\n");
+			degauss_shortcut_reset_controllers();
 			for (int i = 0; i < NUMDEV; i++) if (pool[i].fd >= 0)
 			{
 				ioctl(pool[i].fd, EVIOCGRAB, 0);
@@ -5166,6 +5173,7 @@ int input_test(int getchar)
 
 	if (state == 0)
 	{
+		degauss_shortcut_reset_controllers();
 		input_uinp_setup();
 		memset(pool, -1, sizeof(pool));
 
@@ -5673,6 +5681,7 @@ int input_test(int getchar)
 
 			if ((pool[NUMDEV].revents & POLLIN) && check_devs())
 			{
+				degauss_shortcut_reset_controllers();
 				printf("Close all devices.\n");
 				for (int i = 0; i < NUMDEV; i++) if (pool[i].fd >= 0)
 				{
