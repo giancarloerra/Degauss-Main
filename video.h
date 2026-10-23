@@ -72,6 +72,7 @@ bool video_fb_enable(int enable, int n = 0);
 int video_fb_state();
 void video_set_degauss_native_fb(bool enable);
 bool video_get_degauss_native_fb();
+void video_get_degauss_terminal_size(int &width, int &height);
 void video_menu_bg(int n, int idle = 0);
 int video_bg_has_picture();
 int video_chvt(int num);

@@ -14,6 +14,8 @@
 #include <sys/stat.h>
 #include <linux/input.h>
 #include <linux/uinput.h>
+#include <linux/fb.h>
+#include <sys/ioctl.h>
 #include <time.h>
 #include <stdarg.h>
 #include <math.h>
@@ -37,6 +39,7 @@
 #include "scaler.h"
 #include "file_io.h"
 #include "support/degauss/degauss_shortcut.h"
+#include "offload.h"
 
 #define NUMDEV 30
 #define UINPUT_NAME "MiSTer virtual input"
@@ -6291,19 +6294,62 @@ int input_test(int getchar)
 						if (requester >= 100000000 && requester < 1000000000 && *end == ' '
 							&& (!strcmp(end + 1, "frontend") || !strcmp(end + 1, "script")))
 						{
-							const bool applied = menu_degauss_terminal_mode(!strcmp(end + 1, "frontend"));
-							char status[128], temporary[136];
-							snprintf(status, sizeof(status), "/tmp/degauss-terminal-%lu.status", requester);
-							snprintf(temporary, sizeof(temporary), "%s.part", status);
-							const int fd = open(temporary, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
-							if (fd >= 0)
+							char error[256] = {};
+							const bool applied = menu_degauss_terminal_mode(!strcmp(end + 1, "frontend"), error, sizeof(error));
+							int width, height;
+							video_get_degauss_terminal_size(width, height);
+							// Geometry/font writes already use this single FIFO worker.
+							// Reply after those jobs, not while they are merely queued.
+							offload_add_work([applied, requester, width, height, error]
 							{
-								const char *response = applied ? "ok\n" : "error Degauss terminal is not active\n";
-								const ssize_t written = write(fd, response, strlen(response));
-								const int closed = close(fd);
-								if (written == static_cast<ssize_t>(strlen(response)) && !closed) rename(temporary, status);
-								else unlink(temporary);
-							}
+								bool ready = applied;
+								char detail[256];
+								snprintf(detail, sizeof(detail), "%s", error);
+								if (ready)
+								{
+									fb_var_screeninfo info = {};
+									const int framebuffer = open("/dev/fb0", O_RDONLY | O_CLOEXEC);
+									int failure = framebuffer < 0 ? errno : 0;
+									if (framebuffer >= 0)
+									{
+										if (ioctl(framebuffer, FBIOGET_VSCREENINFO, &info)) failure = errno;
+										close(framebuffer);
+									}
+									if (failure)
+									{
+										ready = false;
+										snprintf(detail, sizeof(detail), "Reading framebuffer geometry failed: %s", strerror(failure));
+									}
+									else if (info.xres != static_cast<unsigned>(width) || info.yres != static_cast<unsigned>(height) || info.bits_per_pixel != 32)
+									{
+										ready = false;
+										snprintf(detail, sizeof(detail), "Framebuffer is %ux%ux%u, expected %dx%dx32", info.xres, info.yres, info.bits_per_pixel, width, height);
+									}
+								}
+								char status[128], temporary[136], response[300];
+								snprintf(status, sizeof(status), "/tmp/degauss-terminal-%lu.status", requester);
+								snprintf(temporary, sizeof(temporary), "%s.part", status);
+								const int length = snprintf(response, sizeof(response), "%s%s\n", ready ? "ok" : "error ", ready ? "" : detail);
+								const int fd = open(temporary, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+								if (fd >= 0)
+								{
+									const ssize_t written = write(fd, response, length);
+									if (written < 0) perror("write Degauss terminal status");
+									else if (written != length) fprintf(stderr, "Short Degauss terminal status write\n");
+									const int closed = close(fd);
+									if (closed) perror("close Degauss terminal status");
+									if (written == length && !closed)
+									{
+										if (rename(temporary, status))
+										{
+											perror("publish Degauss terminal status");
+											unlink(temporary);
+										}
+									}
+									else unlink(temporary);
+								}
+								else perror("create Degauss terminal status");
+							});
 						}
 					}
 					else if (!strncmp(cmd, "fb_preset ", 10))

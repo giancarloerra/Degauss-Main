@@ -4146,6 +4146,12 @@ bool video_get_degauss_native_fb()
 	return degauss_native_fb;
 }
 
+void video_get_degauss_terminal_size(int &width, int &height)
+{
+	width = con_width;
+	height = con_height;
+}
+
 void video_set_degauss_native_fb(bool enable)
 {
 	enable = enable && cfg.degauss_native_analog;

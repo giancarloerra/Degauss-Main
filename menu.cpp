@@ -920,15 +920,32 @@ static void vga_nag(bool show_warning = true)
 // The launcher remains the owner while its frontend execs a selected script.
 // Reconfigure through the same path as ordinary Scripts before acknowledging
 // the handover, then restore the frontend's configuration before it opens fb0.
-bool menu_degauss_terminal_mode(bool frontend)
+bool menu_degauss_terminal_mode(bool frontend, char *error, size_t error_size)
 {
 	if (!degauss_running || menustate != MENU_SCRIPTS_FB2 || !is_menu()
-		|| video_chvt(0) != 2) return false;
+		|| video_chvt(0) != 2)
+	{
+		snprintf(error, error_size, "Degauss terminal is not active");
+		return false;
+	}
+	if (!frontend)
+	{
+		// One acknowledged command owns effect cleanup and the mode switch.
+		// Separate writes can coalesce in Main's unframed command FIFO.
+		if (!video_set_degauss_preset(nullptr, error, error_size)) return false;
+		if (!video_set_degauss_display_mask(nullptr))
+		{
+			snprintf(error, error_size, "Degauss mask could not be cleared");
+			return false;
+		}
+	}
 	const bool previous_native = video_get_degauss_native_fb();
 	video_set_degauss_native_fb(frontend);
-	if (video_chvt(2) != 2 || !video_fb_enable(1))
+	const bool terminal = video_chvt(2) == 2;
+	if (!terminal || !video_fb_enable(1))
 	{
 		video_set_degauss_native_fb(previous_native);
+		snprintf(error, error_size, "%s", terminal ? "Framebuffer configuration or enable failed" : "Terminal activation failed");
 		return false;
 	}
 	vga_nag(!frontend);
