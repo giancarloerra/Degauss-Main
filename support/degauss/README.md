@@ -66,12 +66,17 @@ Main start.
 
 ## Script display handover
 
-The owning Main marks its frontend child with `DEGAUSS_SCRIPT_HANDOVER=1`.
-The frontend requests `fb_degauss <token> script` before executing a script and
-`fb_degauss <token> frontend` before opening its framebuffer. Main clears
-frontend effects for scripts and acknowledges only after the existing video
-worker has applied the requested terminal geometry and the kernel reports it.
-Stock-Main script launches retain the existing path without this capability.
+The owning Main marks its frontend child with `DEGAUSS_NATIVE_SCRIPTS=1`.
+For a selected script, the frontend saves its existing script-resume record and
+exact return command, releases its resources and exits with status 42. Main
+finishes the normal frontend cleanup, then starts the selected script through
+the native `MENU_SCRIPTS_FB` and agetty/tty2 path used by OSD Scripts. There is
+no script-specific display mode. After the native result/key-to-return flow,
+Main starts exactly one frontend with its original arguments and selection.
+
+`DEGAUSS_SCRIPT_HANDOVER=1` and the acknowledged `fb_degauss` command remain
+for initial framebuffer readiness and compatibility with older frontends.
+Stock-Main on-demand launches preserve their existing execution path.
 
 Only a cold-boot Menu handover sets `DEGAUSS_BOOT_START=1`; game, script and
 Frontend-shortcut returns clear it. The frontend owns the optional last-game
@@ -86,6 +91,7 @@ dependencies and can be checked on the host:
 ./tests/run-degauss-shortcut-tests.sh
 python3 tests/run-degauss-core-menu-tests.py
 python3 tests/degauss_script_handover_test.py
+python3 tests/degauss_native_scripts_test.py
 ```
 
 The complete fork build uses the existing containerised ARM toolchain:

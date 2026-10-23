@@ -38,6 +38,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include <stdio.h>
 #include <sched.h>
 #include <string.h>
+#include <string>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <pthread.h>
@@ -56,6 +57,10 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 // Degauss: true while the frontend, rather than an ordinary script, owns
 // the framebuffer terminal.
 static bool degauss_running = false;
+static bool degauss_resume_after_script = false;
+static bool degauss_starting_script_return = false;
+static constexpr int DEGAUSS_NATIVE_SCRIPT_EXIT = 42;
+static constexpr const char *DEGAUSS_SCRIPT_RETURN = "/tmp/degauss-script-return.sh";
 static bool degauss_shortcut_save_failed = false;
 static bool degauss_controller_capture = false;
 #include "user_io.h"
@@ -918,9 +923,8 @@ static void vga_nag(bool show_warning = true)
 	EnableOsd_on(OSD_ALL);
 }
 
-// The launcher remains the owner while its frontend execs a selected script.
-// Reconfigure through the same path as ordinary Scripts before acknowledging
-// the handover, then restore the frontend's configuration before it opens fb0.
+// Acknowledge framebuffer readiness on frontend startup. Older frontend
+// versions also use this command for their in-session script handover.
 bool menu_degauss_terminal_mode(bool frontend, char *error, size_t error_size)
 {
 	if (!degauss_running || menustate != MENU_SCRIPTS_FB2 || !is_menu()
@@ -951,6 +955,39 @@ bool menu_degauss_terminal_mode(bool frontend, char *error, size_t error_size)
 	}
 	vga_nag(!frontend);
 	return true;
+}
+
+// The frontend has finished, rather than execing a script inside its session.
+// Its existing resume record supplies the selected path for native Scripts.
+static bool degauss_native_script_request(char *path, size_t capacity)
+{
+	char request[1031];
+	FILE *file = fopen("/tmp/degauss.resume", "rb");
+	if (!file) { perror("Degauss native script request"); return false; }
+	const size_t length = fread(request, 1, sizeof(request), file);
+	const bool read_ok = !ferror(file);
+	fclose(file);
+	if (!read_ok) { perror("Reading Degauss native script request"); return false; }
+	if (length <= 7 || length == sizeof(request)
+		|| memcmp(request, "script\0", 7) || request[7] != '/'
+		|| length - 7 >= capacity || memchr(request + 7, 0, length - 7))
+	{
+		fprintf(stderr, "Degauss native script request has an invalid path or format\n");
+		return false;
+	}
+	if (access(DEGAUSS_SCRIPT_RETURN, X_OK)) { perror("Degauss script return launcher"); return false; }
+	memcpy(path, request + 7, length - 7);
+	path[length - 7] = 0;
+	return true;
+}
+
+static std::string degauss_shell_quote(const char *value)
+{
+	std::string result = "'";
+	for (; *value; ++value)
+		if (*value == '\'') result += "'\\''";
+		else result += *value;
+	return result + "'";
 }
 
 void process_addon(char *ext, uint8_t idx)
@@ -7985,14 +8022,17 @@ void HandleUI(void)
 	case MENU_SCRIPTS_FB:
 		if (cfg.fb_terminal)
 		{
-			memcpy(Selected_F[0], selPath, sizeof(Selected_F[0]));
+			const bool returning = degauss_starting_script_return;
+			degauss_starting_script_return = false;
+			if (!returning) memcpy(Selected_F[0], selPath, sizeof(Selected_F[0]));
 			static char cmd[1024 * 2];
+			std::string native_command;
 			const char *path = getFullPath(selPath);
 			menustate = MENU_SCRIPTS_FB2;
 			// Degauss: a frontend is not a script whose output anyone
 			// reads. Remembered here because the state that ends the run
 			// no longer knows which path started it.
-			degauss_running = degauss_is_frontend_script(selPath);
+			degauss_running = returning || degauss_is_frontend_script(selPath);
 			video_set_degauss_native_fb(degauss_running);
 			video_chvt(2);
 			video_fb_enable(1);
@@ -8001,13 +8041,30 @@ void HandleUI(void)
 			{
 				sprintf(cmd, "#!/bin/bash\nexport LC_ALL=en_US.UTF-8\nexport HOME=/root\ncd $(dirname %s)\n%s\n", path, path);
 			}
+			else if (degauss_resume_after_script)
+			{
+				// The selected script uses the same terminal, agetty and native
+				// Scripts state as the OSD. Only its documented origin/Bash
+				// compatibility and result text differ from ordinary selection.
+				const std::string quoted = degauss_shell_quote(path);
+				native_command = "#!/bin/bash\nexport LC_ALL=en_US.UTF-8\nexport HOME=/root\nexport LAUNCH_ORIGIN_ID=degauss\ncd \"$(dirname " + quoted + ")\" || exit 1\n";
+				if (access(path, X_OK)) native_command += "/bin/bash -- ";
+				native_command += quoted + "\nstatus=$?\nif [ \"$status\" -ne 0 ]; then printf '\\nScript exited with status %s\\n' \"$status\"; fi\necho \"Press any key to continue\"\n";
+			}
 			else
 			{
 				sprintf(cmd, "#!/bin/bash\nexport LC_ALL=en_US.UTF-8\nexport HOME=/root\ncd $(dirname %s)\n%s\necho \"Press any key to continue\"\n", path, path);
 			}
 
 			unlink("/tmp/script");
-			FileSave("/tmp/script", cmd, strlen(cmd));
+			char *command = native_command.empty() ? cmd : &native_command[0];
+			const int written = FileSave("/tmp/script", command, strlen(command));
+			if ((degauss_resume_after_script || returning) && written != static_cast<int>(strlen(command)))
+			{
+				ttypid = 0;
+				InfoMessage("Writing native script launcher failed; check Main log", 5000);
+				break;
+			}
 			ttystatus = 0;
 			ttypid = fork();
 			if (ttypid < 0)
@@ -8022,6 +8079,11 @@ void HandleUI(void)
 				menusub = 3;
 				OsdClear();
 				OsdEnable(DISABLE_KEYBOARD);
+				if (degauss_resume_after_script)
+				{
+					menustate = MENU_SCRIPTS_FB2;
+					InfoMessage("Starting native script failed; check Main log", 5000);
+				}
 			}
 			else if (!ttypid)
 			{
@@ -8030,6 +8092,11 @@ void HandleUI(void)
 					if (setenv("DEGAUSS_SCRIPT_HANDOVER", "1", 1))
 					{
 						perror("Degauss script handover environment");
+						_exit(1);
+					}
+					if (setenv("DEGAUSS_NATIVE_SCRIPTS", "1", 1))
+					{
+						perror("Degauss native Scripts environment");
 						_exit(1);
 					}
 					// -i drops the issue file, -n the login prompt: between
@@ -8051,7 +8118,7 @@ void HandleUI(void)
 	case MENU_SCRIPTS_FB2:
 		if (ttypid)
 		{
-			if (waitpid(ttypid, 0, WNOHANG) > 0)
+			if (waitpid(ttypid, &ttystatus, WNOHANG) > 0)
 			{
 				ttypid = 0;
 				user_io_osd_key_enable(1);
@@ -8068,6 +8135,15 @@ void HandleUI(void)
 					menusub = 3;
 					OsdClear();
 					OsdEnable(DISABLE_KEYBOARD);
+					if (WIFEXITED(ttystatus) && WEXITSTATUS(ttystatus) == DEGAUSS_NATIVE_SCRIPT_EXIT)
+					{
+						if (degauss_native_script_request(selPath, sizeof(selPath)))
+						{
+							degauss_resume_after_script = true;
+							menustate = MENU_SCRIPTS_FB;
+						}
+						else InfoMessage("Degauss native script request failed; check Main log", 5000);
+					}
 				}
 			}
 		}
@@ -8081,6 +8157,13 @@ void HandleUI(void)
 				menusub = 3;
 				OsdClear();
 				OsdEnable(DISABLE_KEYBOARD);
+				if (degauss_resume_after_script)
+				{
+					degauss_resume_after_script = false;
+					degauss_starting_script_return = true;
+					snprintf(selPath, sizeof(selPath), "%s", DEGAUSS_SCRIPT_RETURN);
+					menustate = MENU_SCRIPTS_FB;
+				}
 			}
 		}
 		break;
