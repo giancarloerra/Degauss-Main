@@ -81,6 +81,13 @@ int main(int argc, char *argv[])
 	{
 		fpga_load_rbf(DEGAUSS_COLD_BOOT_MARKER);
 	}
+	// Only the automatic cold-boot handover may start the saved game.
+	// Core returns and explicit Frontend shortcuts must not inherit it.
+	if (degauss_cold_boot)
+	{
+		if (setenv("DEGAUSS_BOOT_START", "1", 1)) perror("Degauss boot context");
+	}
+	else unsetenv("DEGAUSS_BOOT_START");
 	user_io_init(degauss_cold_boot ? "" : ((argc > 1) ? argv[1] : ""),
 		(argc > 2) ? argv[2] : NULL);
 
