@@ -61,8 +61,13 @@ static pid_t test_waitpid(pid_t child, int *status, int options) {
     *status = next_status;
     return child;
 }
+static int test_unlink(const char *path) {
+    assert(!strcmp(path, "/tmp/script"));
+    return 0;
+}
 #define fork test_fork
 #define waitpid test_waitpid
+#define unlink test_unlink
 ''' + helpers + r'''
 static void step() {
     switch (menustate) {
