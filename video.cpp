@@ -3976,7 +3976,7 @@ static bool prepare_degauss_native_timing(uint16_t timing[8], int *width = nullp
 	return true;
 }
 
-void video_fb_enable(int enable, int n)
+bool video_fb_enable(int enable, int n)
 {
 	PROFILE_FUNCTION();
 
@@ -3984,7 +3984,7 @@ void video_fb_enable(int enable, int n)
 	{
 		uint16_t native_timing[8] = {};
 		const bool native = video_degauss_native_fb_active();
-		if ((enable || menu_bg) && native && !prepare_degauss_native_timing(native_timing)) return;
+        if ((enable || menu_bg) && native && !prepare_degauss_native_timing(native_timing)) return false;
 		int res = spi_uio_cmd_cont(UIO_SET_FBUF);
 		if (res)
 		{
@@ -3997,7 +3997,7 @@ void video_fb_enable(int enable, int n)
 			{
 				DisableIO();
 				cfg_error("DEGAUSS_ANALOG_VIDEO_MODE requires the matching Menu core");
-				return;
+				return false;
 			}
 			if (enable)
 			{
@@ -4072,7 +4072,9 @@ void video_fb_enable(int enable, int n)
 			set_yc_mode();
 		}
 		if (is_menu()) user_io_status_set("[8:5]", (fb_enabled && !fb_num) ? 0xB : 0);
+		return res != 0;
 	}
+	return false;
 }
 
 int video_fb_state()
@@ -4137,6 +4139,17 @@ static void video_fb_config()
 	if (fb_enabled) video_fb_enable(1, fb_num);
 
 	fb_write_module_params();
+}
+
+bool video_get_degauss_native_fb()
+{
+	return degauss_native_fb;
+}
+
+void video_get_degauss_terminal_size(int &width, int &height)
+{
+	width = con_width;
+	height = con_height;
 }
 
 void video_set_degauss_native_fb(bool enable)
@@ -4732,14 +4745,19 @@ int video_chvt(int num)
 	static int cur_vt = 0;
 	if (num)
 	{
-		cur_vt = num;
 		int fd;
 		if ((fd = open("/dev/tty0", O_RDONLY | O_CLOEXEC)) >= 0)
 		{
-			if (ioctl(fd, VT_ACTIVATE, cur_vt)) printf("ioctl VT_ACTIVATE fails\n");
-			if (ioctl(fd, VT_WAITACTIVE, cur_vt)) printf("ioctl VT_WAITACTIVE fails\n");
+			if (ioctl(fd, VT_ACTIVATE, num) || ioctl(fd, VT_WAITACTIVE, num))
+			{
+				perror("activate framebuffer terminal");
+				close(fd);
+				return -1;
+			}
 			close(fd);
+			cur_vt = num;
 		}
+		else { perror("open framebuffer terminal"); return -1; }
 	}
 
 	return cur_vt ? cur_vt : 1;
