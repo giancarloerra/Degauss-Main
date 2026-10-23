@@ -51,16 +51,12 @@ fi
 grep -A4 'case DEGAUSS_SHORTCUT_MENUSUB:' menu.cpp \
 	| grep -q 'menustate = MENU_DEGAUSS_SHORTCUT1'
 
-# The release UI and input path are keyboard-only. Version 1 keeps a legacy
-# byte solely so files written by local pre-release builds remain readable.
-if grep -q ' Controller:' menu.cpp; then
-	echo "Frontend shortcut UI still exposes a controller assignment" >&2
-	exit 1
-fi
-if grep -q 'degauss_shortcut_handle_controller_event' input.cpp; then
-	echo "Frontend shortcut input still handles controller events" >&2
-	exit 1
-fi
+# Both inputs use one shared configuration. The controller hook only consumes
+# assignment capture; the normal runtime event reaches Main's game path.
+grep -q ' Controller:' menu.cpp
+grep -q 'degauss_shortcut_handle_controller_event' input.cpp
+grep -q 'degauss_shortcut_poll_controllers();' menu.cpp
+grep -q 'degauss_shortcut_reset_controllers();' input.cpp
 grep -q 'legacy_controller_button' support/degauss/degauss_shortcut_logic.h
 grep -q ' A: Capture   X: Disable' menu.cpp
 if grep -q 'set/capture' menu.cpp; then
