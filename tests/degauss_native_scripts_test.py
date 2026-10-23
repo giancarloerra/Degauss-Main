@@ -44,7 +44,9 @@ static int user_io_status_get(const char*) { return 0; }
 static void user_io_osd_key_enable(int) {}
 static void OsdClear() {}
 static void OsdEnable(int) {}
-static void InfoMessage(const char *s, int) { reported_error = s; }
+static void OsdSetSize(int n) { assert(n == 16); }
+static void OsdSetTitle(const char*, int) {}
+static void OsdWrite(int row, const char *s) { if (row == 1) reported_error = s; }
 static int FileSave(const char *p, void *data, int size) {
     assert(!strcmp(p, "/tmp/script"));
     saved_command.assign(static_cast<char*>(data), size);
@@ -152,13 +154,32 @@ int main(int argc, char **argv) {
     fail_save = true;
     step();
     assert(ttypid == 0 && menustate == MENU_SCRIPTS_FB2);
-    assert(reported_error.find("Writing native") == 0);
+    assert(reported_error == "Cannot write script launcher");
+    assert(!degauss_running);
+    assert((terminal_calls == std::vector<int>{11, 22, 31, 50, 11, 40, 30}));
+    c = UPSTROKE;
+    step();
+    assert(menustate == MENU_SCRIPTS_FB && degauss_starting_script_return);
+    fail_save = false;
+    c = 0;
+    step();
+    assert(degauss_running);
+    reset();
+    degauss_starting_script_return = true;
+    fail_save = true;
+    step();
+    assert(ttypid == 0 && menustate == MENU_SCRIPTS_FB2 && !degauss_running);
+    assert(reported_error == "Cannot write script launcher");
+    assert((terminal_calls == std::vector<int>{10, 22, 31, 51, 11, 40, 30}));
+    c = UPSTROKE;
+    step();
+    assert(menustate == MENU_SYSTEM1);
     reset();
     degauss_resume_after_script = true;
     fail_fork = true;
     step();
     assert(ttypid == 0 && menustate == MENU_SCRIPTS_FB2);
-    assert(reported_error.find("Starting native") == 0);
+    assert(reported_error == "Cannot start native script");
     c = UPSTROKE;
     step();
     assert(menustate == MENU_SCRIPTS_FB && degauss_starting_script_return);
@@ -171,6 +192,9 @@ int main(int argc, char **argv) {
     next_status = DEGAUSS_NATIVE_SCRIPT_EXIT << 8;
     step();
     assert(!reported_error.empty() && !degauss_resume_after_script);
+    assert(menustate == MENU_SCRIPTS_FB2);
+    c = UPSTROKE;
+    step();
     assert(menustate == MENU_SYSTEM1);
 }
 '''

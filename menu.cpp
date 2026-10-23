@@ -990,6 +990,18 @@ static std::string degauss_shell_quote(const char *value)
 	return result + "'";
 }
 
+static void degauss_script_error(const char *message)
+{
+	OsdSetSize(16);
+	OsdSetTitle("Script Error", 0);
+	OsdClear();
+	OsdWrite(1, message);
+	OsdWrite(3, "Check Main log for details");
+	OsdWrite(5, "Press any key to continue");
+	OsdEnable(DISABLE_KEYBOARD);
+	menustate = MENU_SCRIPTS_FB2;
+}
+
 void process_addon(char *ext, uint8_t idx)
 {
 	static char name[1024];
@@ -8059,17 +8071,13 @@ void HandleUI(void)
 			unlink("/tmp/script");
 			char *command = native_command.empty() ? cmd : &native_command[0];
 			const int written = FileSave("/tmp/script", command, strlen(command));
-			if ((degauss_resume_after_script || returning) && written != static_cast<int>(strlen(command)))
-			{
-				ttypid = 0;
-				InfoMessage("Writing native script launcher failed; check Main log", 5000);
-				break;
-			}
+			const bool save_failed = (degauss_resume_after_script || returning)
+				&& written != static_cast<int>(strlen(command));
 			ttystatus = 0;
-			ttypid = fork();
+			ttypid = save_failed ? -1 : fork();
 			if (ttypid < 0)
 			{
-				perror("fork");
+				if (!save_failed) perror("fork");
 				ttypid = 0;
 				degauss_running = false;
 				video_set_degauss_native_fb(false);
@@ -8079,11 +8087,9 @@ void HandleUI(void)
 				menusub = 3;
 				OsdClear();
 				OsdEnable(DISABLE_KEYBOARD);
-				if (degauss_resume_after_script)
-				{
-					menustate = MENU_SCRIPTS_FB2;
-					InfoMessage("Starting native script failed; check Main log", 5000);
-				}
+				if (save_failed || degauss_resume_after_script || returning)
+					degauss_script_error(save_failed ? "Cannot write script launcher"
+						: "Cannot start native script");
 			}
 			else if (!ttypid)
 			{
@@ -8142,7 +8148,7 @@ void HandleUI(void)
 							degauss_resume_after_script = true;
 							menustate = MENU_SCRIPTS_FB;
 						}
-						else InfoMessage("Degauss native script request failed; check Main log", 5000);
+						else degauss_script_error("Invalid script handover");
 					}
 				}
 			}
