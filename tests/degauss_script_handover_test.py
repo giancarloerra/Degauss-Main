@@ -20,9 +20,11 @@ constexpr int MENU_SCRIPTS_FB2 = 1;
 static int menustate = MENU_SCRIPTS_FB2;
 static std::vector<int> calls;
 static bool activate_ok = true, framebuffer_ok = true;
+static bool native_selection = false;
 static bool is_menu() { return menu_core; }
 static int video_chvt(int n) { if (n) { calls.push_back(2); if (!activate_ok) return -1; vt = n; } return vt; }
-static void video_set_degauss_native_fb(bool enabled) { calls.push_back(enabled ? 1 : 0); }
+static bool video_get_degauss_native_fb() { return native_selection; }
+static void video_set_degauss_native_fb(bool enabled) { native_selection = enabled; calls.push_back(enabled ? 1 : 0); }
 static bool video_fb_enable(int n) { assert(n == 1); calls.push_back(3); return framebuffer_ok; }
 static void vga_nag(bool warning) { calls.push_back(warning ? 4 : 5); }
 """ + function + r"""
@@ -34,11 +36,13 @@ int main() {
     assert((calls == std::vector<int>{1, 2, 3, 5}));
     calls.clear();
     activate_ok = false;
-    assert(!menu_degauss_terminal_mode(true));
-    assert((calls == std::vector<int>{1, 2}));
+    assert(!menu_degauss_terminal_mode(false));
+    assert((calls == std::vector<int>{0, 2, 1}));
+    assert(native_selection);
     calls.clear(); activate_ok = true; framebuffer_ok = false;
     assert(!menu_degauss_terminal_mode(false));
-    assert((calls == std::vector<int>{0, 2, 3}));
+    assert((calls == std::vector<int>{0, 2, 3, 1}));
+    assert(native_selection);
     calls.clear(); framebuffer_ok = true;
     degauss_running = false;
     assert(!menu_degauss_terminal_mode(true));

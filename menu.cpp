@@ -924,8 +924,13 @@ bool menu_degauss_terminal_mode(bool frontend)
 {
 	if (!degauss_running || menustate != MENU_SCRIPTS_FB2 || !is_menu()
 		|| video_chvt(0) != 2) return false;
+	const bool previous_native = video_get_degauss_native_fb();
 	video_set_degauss_native_fb(frontend);
-	if (video_chvt(2) != 2 || !video_fb_enable(1)) return false;
+	if (video_chvt(2) != 2 || !video_fb_enable(1))
+	{
+		video_set_degauss_native_fb(previous_native);
+		return false;
+	}
 	vga_nag(!frontend);
 	return true;
 }

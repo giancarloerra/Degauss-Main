@@ -4141,6 +4141,11 @@ static void video_fb_config()
 	fb_write_module_params();
 }
 
+bool video_get_degauss_native_fb()
+{
+	return degauss_native_fb;
+}
+
 void video_set_degauss_native_fb(bool enable)
 {
 	enable = enable && cfg.degauss_native_analog;
