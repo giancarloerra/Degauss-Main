@@ -6284,6 +6284,28 @@ int input_test(int getchar)
 					if (!strncmp(cmd, "fb_cmd", 6)) video_cmd(cmd);
 					else if (!strcmp(cmd, "fb_mask off")) video_set_degauss_display_mask(nullptr);
 					else if (!strncmp(cmd, "fb_mask ", 8)) video_set_degauss_display_mask(cmd + 8);
+					else if (!strncmp(cmd, "fb_degauss ", 11))
+					{
+						char *end;
+						const unsigned long requester = strtoul(cmd + 11, &end, 10);
+						if (requester >= 100000000 && requester < 1000000000 && *end == ' '
+							&& (!strcmp(end + 1, "frontend") || !strcmp(end + 1, "script")))
+						{
+							const bool applied = menu_degauss_terminal_mode(!strcmp(end + 1, "frontend"));
+							char status[128], temporary[136];
+							snprintf(status, sizeof(status), "/tmp/degauss-terminal-%lu.status", requester);
+							snprintf(temporary, sizeof(temporary), "%s.part", status);
+							const int fd = open(temporary, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+							if (fd >= 0)
+							{
+								const char *response = applied ? "ok\n" : "error Degauss terminal is not active\n";
+								const ssize_t written = write(fd, response, strlen(response));
+								const int closed = close(fd);
+								if (written == static_cast<ssize_t>(strlen(response)) && !closed) rename(temporary, status);
+								else unlink(temporary);
+							}
+						}
+					}
 					else if (!strncmp(cmd, "fb_preset ", 10))
 					{
 						char *end;

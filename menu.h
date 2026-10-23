@@ -8,6 +8,7 @@ void SelectFile(const char* path, const char* pFileExt, int Options, unsigned ch
 void HandleUI(void);
 void menu_key_set(unsigned int c);
 bool menu_osd_is_unlocked(void);
+bool menu_degauss_terminal_mode(bool frontend);
 void menu_process_save();
 void PrintDirectory(int expand = 0);
 void ScrollLongName(void);

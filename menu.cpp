@@ -917,6 +917,20 @@ static void vga_nag(bool show_warning = true)
 	EnableOsd_on(OSD_ALL);
 }
 
+// The launcher remains the owner while its frontend execs a selected script.
+// Reconfigure through the same path as ordinary Scripts before acknowledging
+// the handover, then restore the frontend's configuration before it opens fb0.
+bool menu_degauss_terminal_mode(bool frontend)
+{
+	if (!degauss_running || menustate != MENU_SCRIPTS_FB2 || !is_menu()
+		|| video_chvt(0) != 2) return false;
+	video_set_degauss_native_fb(frontend);
+	video_chvt(2);
+	video_fb_enable(1);
+	vga_nag(!frontend);
+	return true;
+}
+
 void process_addon(char *ext, uint8_t idx)
 {
 	static char name[1024];
@@ -7976,6 +7990,11 @@ void HandleUI(void)
 			{
 				if (degauss_running)
 				{
+					if (setenv("DEGAUSS_SCRIPT_HANDOVER", "1", 1))
+					{
+						perror("Degauss script handover environment");
+						_exit(1);
+					}
 					// -i drops the issue file, -n the login prompt: between
 					// them they are the "Welcome to MiSTer" and "login: root
 					// (automatic login)" that would otherwise flash up
