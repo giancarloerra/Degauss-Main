@@ -32,6 +32,9 @@ static int ttystatus = 0, next_status = 0;
 static struct { int fb_terminal = 1; } cfg;
 static std::string saved_command, reported_error;
 static bool fail_save = false, fail_fork = false;
+static bool fork_child = false, fail_session = false;
+static int session_calls = 0, exec_calls = 0;
+struct ChildResult { int status; };
 static std::vector<int> terminal_calls;
 static bool degauss_is_frontend_script(const char *p) { return !strcmp(p, "Scripts/degauss.sh"); }
 static const char *getFullPath(const char *p) { return p; }
@@ -54,8 +57,20 @@ static int FileSave(const char *p, void *data, int size) {
 }
 static pid_t test_fork() {
     if (fail_fork) { errno = EAGAIN; return -1; }
-    return 123;
+    return fork_child ? 0 : 123;
 }
+pid_t test_setsid() {
+    ++session_calls;
+    if (fail_session) { errno = EPERM; return -1; }
+    return 321;
+}
+static int test_execl(const char *path, const char*, ...) {
+    assert(!strcmp(path, "/sbin/agetty"));
+    assert(session_calls == (degauss_running ? 0 : 1));
+    ++exec_calls;
+    throw ChildResult{0};
+}
+[[noreturn]] static void test_exit(int status) { throw ChildResult{status}; }
 static pid_t test_waitpid(pid_t child, int *status, int options) {
     assert(child == 123 && options == WNOHANG);
     *status = next_status;
@@ -68,6 +83,10 @@ static int test_unlink(const char *path) {
 #define fork test_fork
 #define waitpid test_waitpid
 #define unlink test_unlink
+#define setsid test_setsid
+#define execl test_execl
+#define _exit test_exit
+#define exit test_exit
 ''' + helpers + r'''
 static void step() {
     switch (menustate) {
@@ -83,6 +102,8 @@ static void reset() {
     saved_command.clear();
     reported_error.clear();
     fail_save = fail_fork = false;
+    fork_child = fail_session = false;
+    session_calls = exec_calls = 0;
 }
 static void write_file(const char *path, const std::string &body, bool executable = false) {
     FILE *file = fopen(path, "wb"); assert(file);
@@ -148,7 +169,35 @@ int main(int argc, char **argv) {
     assert(terminal_calls == native_calls); // Same native terminal path as OSD selection.
     assert(saved_command.find("LAUNCH_ORIGIN_ID") == std::string::npos);
 
+    // Native OSD and Degauss selections must both give agetty a session
+    // leader, otherwise tty2 has no foreground group to receive Ctrl-C.
+    for (bool from_frontend : {false, true}) {
+        reset();
+        snprintf(selPath, sizeof(selPath), "%s", selected.c_str());
+        fork_child = true;
+        degauss_resume_after_script = from_frontend;
+        try { step(); assert(false); }
+        catch (const ChildResult &result) { assert(result.status == 0); }
+        assert(session_calls == 1 && exec_calls == 1);
+
+        reset();
+        snprintf(selPath, sizeof(selPath), "%s", selected.c_str());
+        fork_child = fail_session = true;
+        degauss_resume_after_script = from_frontend;
+        try { step(); assert(false); }
+        catch (const ChildResult &result) { assert(result.status == 1); }
+        assert(session_calls == 1 && exec_calls == 0);
+    }
     reset();
+    fork_child = true;
+    degauss_starting_script_return = true;
+    snprintf(selPath, sizeof(selPath), "%s", DEGAUSS_SCRIPT_RETURN);
+    try { step(); assert(false); }
+    catch (const ChildResult &result) { assert(result.status == 0); }
+    assert(session_calls == 0 && exec_calls == 1); // Frontend ownership is unchanged.
+
+    reset();
+    snprintf(selPath, sizeof(selPath), "%s", selected.c_str());
     assert(!chmod(selected.c_str(), 0600));
     degauss_resume_after_script = true;
     step();

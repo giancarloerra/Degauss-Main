@@ -73,6 +73,8 @@ finishes the normal frontend cleanup, then starts the selected script through
 the native `MENU_SCRIPTS_FB` and agetty/tty2 path used by OSD Scripts. There is
 no script-specific display mode. After the native result/key-to-return flow,
 Main starts exactly one frontend with its original arguments and selection.
+Native script children acquire their own terminal session so Ctrl-C reaches
+foreground jobs in both OSD Scripts and Degauss-selected scripts.
 
 `DEGAUSS_SCRIPT_HANDOVER=1` and the acknowledged `fb_degauss` command remain
 for initial framebuffer readiness and compatibility with older frontends.

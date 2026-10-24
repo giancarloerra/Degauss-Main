@@ -8093,6 +8093,13 @@ void HandleUI(void)
 			}
 			else if (!ttypid)
 			{
+				// A native script needs its own session for agetty to acquire
+				// tty2 and deliver Ctrl-C to its foreground process group.
+				if (!degauss_running && setsid() < 0)
+				{
+					perror("Native script terminal session");
+					_exit(1);
+				}
 				if (degauss_running)
 				{
 					if (setenv("DEGAUSS_SCRIPT_HANDOVER", "1", 1))
