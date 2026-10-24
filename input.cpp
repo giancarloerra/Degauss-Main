@@ -14,6 +14,8 @@
 #include <sys/stat.h>
 #include <linux/input.h>
 #include <linux/uinput.h>
+#include <linux/fb.h>
+#include <sys/ioctl.h>
 #include <time.h>
 #include <stdarg.h>
 #include <math.h>
@@ -37,6 +39,7 @@
 #include "scaler.h"
 #include "file_io.h"
 #include "support/degauss/degauss_shortcut.h"
+#include "offload.h"
 
 #define NUMDEV 30
 #define UINPUT_NAME "MiSTer virtual input"
@@ -3001,6 +3004,12 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 	{
 		return;
 	}
+	if (!menu_event && ev->type == EV_KEY
+		&& degauss_shortcut_logic::valid_controller_button(ev->code)
+		&& degauss_shortcut_handle_controller_event(sub_dev, ev->code, ev->value))
+	{
+		return;
+	}
 
 	if (ev->type == EV_KEY && ev->code < 256 && !(mapping && mapping_type == 2) && !input[dev].force_joy)
 	{
@@ -4859,6 +4868,7 @@ int process_joycon(int dev, input_event *ev, input_absinfo *absinfo)
 			led_path = get_led_path(r); if (led_path) set_led(led_path, ":combo", id);
 
 			printf("Close all devices.\n");
+			degauss_shortcut_reset_controllers();
 			for (int i = 0; i < NUMDEV; i++) if (pool[i].fd >= 0)
 			{
 				ioctl(pool[i].fd, EVIOCGRAB, 0);
@@ -5166,6 +5176,7 @@ int input_test(int getchar)
 
 	if (state == 0)
 	{
+		degauss_shortcut_reset_controllers();
 		input_uinp_setup();
 		memset(pool, -1, sizeof(pool));
 
@@ -5673,6 +5684,7 @@ int input_test(int getchar)
 
 			if ((pool[NUMDEV].revents & POLLIN) && check_devs())
 			{
+				degauss_shortcut_reset_controllers();
 				printf("Close all devices.\n");
 				for (int i = 0; i < NUMDEV; i++) if (pool[i].fd >= 0)
 				{
@@ -6284,6 +6296,71 @@ int input_test(int getchar)
 					if (!strncmp(cmd, "fb_cmd", 6)) video_cmd(cmd);
 					else if (!strcmp(cmd, "fb_mask off")) video_set_degauss_display_mask(nullptr);
 					else if (!strncmp(cmd, "fb_mask ", 8)) video_set_degauss_display_mask(cmd + 8);
+					else if (!strncmp(cmd, "fb_degauss ", 11))
+					{
+						char *end;
+						const unsigned long requester = strtoul(cmd + 11, &end, 10);
+						if (requester >= 100000000 && requester < 1000000000 && *end == ' '
+							&& (!strcmp(end + 1, "frontend") || !strcmp(end + 1, "script")))
+						{
+							char error[256] = {};
+							const bool applied = menu_degauss_terminal_mode(!strcmp(end + 1, "frontend"), error, sizeof(error));
+							int width, height;
+							video_get_degauss_terminal_size(width, height);
+							// Geometry/font writes already use this single FIFO worker.
+							// Reply after those jobs, not while they are merely queued.
+							offload_add_work([applied, requester, width, height, error]
+							{
+								bool ready = applied;
+								char detail[256];
+								snprintf(detail, sizeof(detail), "%s", error);
+								if (ready)
+								{
+									fb_var_screeninfo info = {};
+									const int framebuffer = open("/dev/fb0", O_RDONLY | O_CLOEXEC);
+									int failure = framebuffer < 0 ? errno : 0;
+									if (framebuffer >= 0)
+									{
+										if (ioctl(framebuffer, FBIOGET_VSCREENINFO, &info)) failure = errno;
+										close(framebuffer);
+									}
+									if (failure)
+									{
+										ready = false;
+										snprintf(detail, sizeof(detail), "Reading framebuffer geometry failed: %s", strerror(failure));
+									}
+									else if (info.xres != static_cast<unsigned>(width) || info.yres != static_cast<unsigned>(height) || info.bits_per_pixel != 32)
+									{
+										ready = false;
+										snprintf(detail, sizeof(detail), "Framebuffer is %ux%ux%u, expected %dx%dx32", info.xres, info.yres, info.bits_per_pixel, width, height);
+									}
+								}
+								char status[128], temporary[136], response[300];
+								snprintf(status, sizeof(status), "/tmp/degauss-terminal-%lu.status", requester);
+								snprintf(temporary, sizeof(temporary), "%s.part", status);
+								const int length = snprintf(response, sizeof(response), "%s%s\n", ready ? "ok" : "error ", ready ? "" : detail);
+								const int fd = open(temporary, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+								if (fd >= 0)
+								{
+									const ssize_t written = write(fd, response, length);
+									if (written < 0) perror("write Degauss terminal status");
+									else if (written != length) fprintf(stderr, "Short Degauss terminal status write\n");
+									const int closed = close(fd);
+									if (closed) perror("close Degauss terminal status");
+									if (written == length && !closed)
+									{
+										if (rename(temporary, status))
+										{
+											perror("publish Degauss terminal status");
+											unlink(temporary);
+										}
+									}
+									else unlink(temporary);
+								}
+								else perror("create Degauss terminal status");
+							});
+						}
+					}
 					else if (!strncmp(cmd, "fb_preset ", 10))
 					{
 						char *end;

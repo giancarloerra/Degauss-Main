@@ -23,10 +23,14 @@ read its shortcut configuration.
 ## Optional return shortcut
 
 The System menu's **Frontend shortcut** row, directly below **Frontend**, opens
-the shortcut settings with A. The keyboard assignment defaults to Off.
+the shortcut settings with A. Keyboard and Controller both default to Off.
 
 - **Keyboard** captures one physical Linux key code. A starts capture and X
   clears it.
+- **Controller** captures one physical Linux button code. Hold it continuously
+  for five seconds to return once; release before another hold. Ordinary button
+  events still reach the running core immediately. Disconnecting, changing core
+  or opening the OSD clears the hold.
 - Menu or B cancels keyboard capture.
 - A malformed or unsupported record is displayed as invalid and can only be
   replaced by explicitly resetting the shortcut to Off.
@@ -37,7 +41,7 @@ The runtime shortcut is accepted only when all of these conditions hold:
 - A non-menu core is running.
 - OSD lock is unlocked.
 - No framebuffer script owns VT 2.
-- A keyboard trigger occurs while the OSD is hidden.
+- The trigger occurs while the OSD is hidden.
 
 The configured keyboard make, repeat and break events are consumed.
 
@@ -52,13 +56,33 @@ The settings are stored at:
 /media/fat/config/degauss/frontend_shortcut.bin
 ```
 
-The version 1 record remains a 16-byte little-endian structure containing
-magic, version, record size, keyboard key, a legacy controller byte, a reserved
-byte and a sentinel. The legacy byte keeps files written by pre-release test
-builds readable, but it is ignored and every new save writes it as zero. A
-missing file means the keyboard shortcut is Off. Wrong size, version, field
-range, reserved value, magic or sentinel is invalid. Deleting the file restores
-the missing-file Off default on the next Main start.
+Existing 16-byte version 1 records remain readable with their keyboard key and
+Controller Off. The retired controller byte does not enable a hold shortcut.
+New saves use a 20-byte version 2 record containing the keyboard key and physical
+controller code, preserving each assignment independently. A missing file means
+both are Off. Wrong size, version, field range, reserved value, magic or sentinel
+is invalid. Deleting the file restores the missing-file Off defaults on the next
+Main start.
+
+## Script display handover
+
+The owning Main marks its frontend child with `DEGAUSS_NATIVE_SCRIPTS=1`.
+For a selected script, the frontend saves its existing script-resume record and
+exact return command, releases its resources and exits with status 42. Main
+finishes the normal frontend cleanup, then starts the selected script through
+the native `MENU_SCRIPTS_FB` and agetty/tty2 path used by OSD Scripts. There is
+no script-specific display mode. After the native result/key-to-return flow,
+Main starts exactly one frontend with its original arguments and selection.
+Native script children acquire their own terminal session so Ctrl-C reaches
+foreground jobs in both OSD Scripts and Degauss-selected scripts.
+
+`DEGAUSS_SCRIPT_HANDOVER=1` and the acknowledged `fb_degauss` command remain
+for initial framebuffer readiness and compatibility with older frontends.
+Stock-Main on-demand launches preserve their existing execution path.
+
+Only a cold-boot Menu handover sets `DEGAUSS_BOOT_START=1`; game, script and
+Frontend-shortcut returns clear it. The frontend owns the optional last-game
+setting and its once-per-Linux-boot attempt.
 
 ## Local verification
 
@@ -68,6 +92,8 @@ dependencies and can be checked on the host:
 ```bash
 ./tests/run-degauss-shortcut-tests.sh
 python3 tests/run-degauss-core-menu-tests.py
+python3 tests/degauss_script_handover_test.py
+python3 tests/degauss_native_scripts_test.py
 ```
 
 The complete fork build uses the existing containerised ARM toolchain:

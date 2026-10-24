@@ -38,6 +38,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include <stdio.h>
 #include <sched.h>
 #include <string.h>
+#include <string>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <pthread.h>
@@ -56,7 +57,12 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 // Degauss: true while the frontend, rather than an ordinary script, owns
 // the framebuffer terminal.
 static bool degauss_running = false;
+static bool degauss_resume_after_script = false;
+static bool degauss_starting_script_return = false;
+static constexpr int DEGAUSS_NATIVE_SCRIPT_EXIT = 42;
+static constexpr const char *DEGAUSS_SCRIPT_RETURN = "/tmp/degauss-script-return.sh";
 static bool degauss_shortcut_save_failed = false;
+static bool degauss_controller_capture = false;
 #include "user_io.h"
 #include "debug.h"
 #include "fpga_io.h"
@@ -917,6 +923,85 @@ static void vga_nag(bool show_warning = true)
 	EnableOsd_on(OSD_ALL);
 }
 
+// Acknowledge framebuffer readiness on frontend startup. Older frontend
+// versions also use this command for their in-session script handover.
+bool menu_degauss_terminal_mode(bool frontend, char *error, size_t error_size)
+{
+	if (!degauss_running || menustate != MENU_SCRIPTS_FB2 || !is_menu()
+		|| video_chvt(0) != 2)
+	{
+		snprintf(error, error_size, "Degauss terminal is not active");
+		return false;
+	}
+	if (!frontend)
+	{
+		// One acknowledged command owns effect cleanup and the mode switch.
+		// Separate writes can coalesce in Main's unframed command FIFO.
+		if (!video_set_degauss_preset(nullptr, error, error_size)) return false;
+		if (!video_set_degauss_display_mask(nullptr))
+		{
+			snprintf(error, error_size, "Degauss mask could not be cleared");
+			return false;
+		}
+	}
+	const bool previous_native = video_get_degauss_native_fb();
+	video_set_degauss_native_fb(frontend);
+	const bool terminal = video_chvt(2) == 2;
+	if (!terminal || !video_fb_enable(1))
+	{
+		video_set_degauss_native_fb(previous_native);
+		snprintf(error, error_size, "%s", terminal ? "Framebuffer configuration or enable failed" : "Terminal activation failed");
+		return false;
+	}
+	vga_nag(!frontend);
+	return true;
+}
+
+// The frontend has finished, rather than execing a script inside its session.
+// Its existing resume record supplies the selected path for native Scripts.
+static bool degauss_native_script_request(char *path, size_t capacity)
+{
+	char request[1031];
+	FILE *file = fopen("/tmp/degauss.resume", "rb");
+	if (!file) { perror("Degauss native script request"); return false; }
+	const size_t length = fread(request, 1, sizeof(request), file);
+	const bool read_ok = !ferror(file);
+	fclose(file);
+	if (!read_ok) { perror("Reading Degauss native script request"); return false; }
+	if (length <= 7 || length == sizeof(request)
+		|| memcmp(request, "script\0", 7) || request[7] != '/'
+		|| length - 7 >= capacity || memchr(request + 7, 0, length - 7))
+	{
+		fprintf(stderr, "Degauss native script request has an invalid path or format\n");
+		return false;
+	}
+	if (access(DEGAUSS_SCRIPT_RETURN, X_OK)) { perror("Degauss script return launcher"); return false; }
+	memcpy(path, request + 7, length - 7);
+	path[length - 7] = 0;
+	return true;
+}
+
+static std::string degauss_shell_quote(const char *value)
+{
+	std::string result = "'";
+	for (; *value; ++value)
+		if (*value == '\'') result += "'\\''";
+		else result += *value;
+	return result + "'";
+}
+
+static void degauss_script_error(const char *message)
+{
+	OsdSetSize(16);
+	OsdSetTitle("Script Error", 0);
+	OsdClear();
+	OsdWrite(1, message);
+	OsdWrite(3, "Check Main log for details");
+	OsdWrite(5, "Press any key to continue");
+	OsdEnable(DISABLE_KEYBOARD);
+	menustate = MENU_SCRIPTS_FB2;
+}
+
 void process_addon(char *ext, uint8_t idx)
 {
 	static char name[1024];
@@ -1709,6 +1794,7 @@ void HandleUI(void)
 		break;
 	}
 
+	degauss_shortcut_poll_controllers();
 	if (degauss_shortcut_take_request())
 	{
 		fpga_load_rbf("menu.rbf");
@@ -3363,11 +3449,15 @@ void HandleUI(void)
 			}
 			else
 			{
-				menumask = 0x3;
+				menumask = 0x7;
 				const uint16_t key = degauss_shortcut_keyboard_key();
 				if (key) snprintf(s, sizeof(s), " Keyboard: key code %u", key);
 				else snprintf(s, sizeof(s), " Keyboard: Off");
 				MenuWrite(n++, s, menusub == 0);
+				const uint16_t button = degauss_shortcut_controller_button();
+				if (button) snprintf(s, sizeof(s), " Controller: button %u (5s)", button);
+				else snprintf(s, sizeof(s), " Controller: Off");
+				MenuWrite(n++, s, menusub == 1);
 
 				MenuWrite(n++);
 				MenuWrite(n++, " A: Capture   X: Disable", 0, 1);
@@ -3376,7 +3466,7 @@ void HandleUI(void)
 					MenuWrite(n++, " Save failed", 0, 1);
 				}
 				while (n < OsdGetSize() - 1) MenuWrite(n++);
-				MenuWrite(n++, STD_BACK, menusub == 1, 0, OSD_ARROW_LEFT);
+				MenuWrite(n++, STD_BACK, menusub == 2, 0, OSD_ARROW_LEFT);
 			}
 		}
 		break;
@@ -3407,17 +3497,25 @@ void HandleUI(void)
 				break;
 			}
 
-			if (c == KEY_TAB && menusub == 0)
+			if (c == KEY_TAB && menusub < 2)
 			{
-				degauss_shortcut_save_failed = !degauss_shortcut_set_keyboard(0);
+				degauss_shortcut_save_failed = menusub == 0
+					? !degauss_shortcut_set_keyboard(0) : !degauss_shortcut_set_controller(0);
 				menustate = MENU_DEGAUSS_SHORTCUT1;
 			}
 			else if (select && menusub == 0)
 			{
+				degauss_controller_capture = false;
 				degauss_shortcut_begin_keyboard_capture();
 				menustate = MENU_DEGAUSS_SHORTCUT_CAPTURE1;
 			}
 			else if (select && menusub == 1)
+			{
+				degauss_controller_capture = true;
+				degauss_shortcut_begin_controller_capture();
+				menustate = MENU_DEGAUSS_SHORTCUT_CAPTURE1;
+			}
+			else if (select && menusub == 2)
 			{
 				menustate = MENU_COMMON1;
 				menusub = DEGAUSS_SHORTCUT_MENUSUB;
@@ -3430,11 +3528,11 @@ void HandleUI(void)
 			firstmenu = 0;
 			menumask = 0;
 			OsdSetSize(16);
-			OsdSetTitle("Keyboard shortcut", 0);
+			OsdSetTitle(degauss_controller_capture ? "Controller shortcut" : "Keyboard shortcut", 0);
 			MenuWrite(0, "");
-			MenuWrite(1, " Press one keyboard key");
+			MenuWrite(1, degauss_controller_capture ? " Press one controller button" : " Press one keyboard key");
 			MenuWrite(2, "");
-			MenuWrite(3, " Pad Menu/B: cancel", 0, 1);
+			MenuWrite(3, degauss_controller_capture ? " Keyboard Esc: cancel" : " Pad Menu/B: cancel", 0, 1);
 			for (int n = 4; n < OsdGetSize(); n++) MenuWrite(n, "");
 			menustate = MENU_DEGAUSS_SHORTCUT_CAPTURE2;
 		}
@@ -3445,16 +3543,18 @@ void HandleUI(void)
 		{
 			degauss_shortcut_cancel_keyboard_capture();
 			menustate = MENU_DEGAUSS_SHORTCUT1;
-			menusub = 0;
+			menusub = degauss_controller_capture ? 1 : 0;
 		}
 		else
 		{
 			uint16_t key = 0;
-			if (degauss_shortcut_take_keyboard_capture(&key))
+			if (degauss_controller_capture ? degauss_shortcut_take_controller_capture(&key)
+				: degauss_shortcut_take_keyboard_capture(&key))
 			{
-				degauss_shortcut_save_failed = !degauss_shortcut_set_keyboard(key);
+				degauss_shortcut_save_failed = degauss_controller_capture
+					? !degauss_shortcut_set_controller(key) : !degauss_shortcut_set_keyboard(key);
 				menustate = MENU_DEGAUSS_SHORTCUT1;
-				menusub = 0;
+				menusub = degauss_controller_capture ? 1 : 0;
 			}
 		}
 		break;
@@ -7934,14 +8034,17 @@ void HandleUI(void)
 	case MENU_SCRIPTS_FB:
 		if (cfg.fb_terminal)
 		{
-			memcpy(Selected_F[0], selPath, sizeof(Selected_F[0]));
+			const bool returning = degauss_starting_script_return;
+			degauss_starting_script_return = false;
+			if (!returning) memcpy(Selected_F[0], selPath, sizeof(Selected_F[0]));
 			static char cmd[1024 * 2];
+			std::string native_command;
 			const char *path = getFullPath(selPath);
 			menustate = MENU_SCRIPTS_FB2;
 			// Degauss: a frontend is not a script whose output anyone
 			// reads. Remembered here because the state that ends the run
 			// no longer knows which path started it.
-			degauss_running = degauss_is_frontend_script(selPath);
+			degauss_running = returning || degauss_is_frontend_script(selPath);
 			video_set_degauss_native_fb(degauss_running);
 			video_chvt(2);
 			video_fb_enable(1);
@@ -7950,18 +8053,31 @@ void HandleUI(void)
 			{
 				sprintf(cmd, "#!/bin/bash\nexport LC_ALL=en_US.UTF-8\nexport HOME=/root\ncd $(dirname %s)\n%s\n", path, path);
 			}
+			else if (degauss_resume_after_script)
+			{
+				// The selected script uses the same terminal, agetty and native
+				// Scripts state as the OSD. Only its documented origin/Bash
+				// compatibility and result text differ from ordinary selection.
+				const std::string quoted = degauss_shell_quote(path);
+				native_command = "#!/bin/bash\nexport LC_ALL=en_US.UTF-8\nexport HOME=/root\nexport LAUNCH_ORIGIN_ID=degauss\ncd \"$(dirname " + quoted + ")\" || exit 1\n";
+				if (access(path, X_OK)) native_command += "/bin/bash -- ";
+				native_command += quoted + "\nstatus=$?\nif [ \"$status\" -ne 0 ]; then printf '\\nScript exited with status %s\\n' \"$status\"; fi\necho \"Press any key to continue\"\n";
+			}
 			else
 			{
 				sprintf(cmd, "#!/bin/bash\nexport LC_ALL=en_US.UTF-8\nexport HOME=/root\ncd $(dirname %s)\n%s\necho \"Press any key to continue\"\n", path, path);
 			}
 
 			unlink("/tmp/script");
-			FileSave("/tmp/script", cmd, strlen(cmd));
+			char *command = native_command.empty() ? cmd : &native_command[0];
+			const int written = FileSave("/tmp/script", command, strlen(command));
+			const bool save_failed = (degauss_resume_after_script || returning)
+				&& written != static_cast<int>(strlen(command));
 			ttystatus = 0;
-			ttypid = fork();
+			ttypid = save_failed ? -1 : fork();
 			if (ttypid < 0)
 			{
-				perror("fork");
+				if (!save_failed) perror("fork");
 				ttypid = 0;
 				degauss_running = false;
 				video_set_degauss_native_fb(false);
@@ -7971,11 +8087,31 @@ void HandleUI(void)
 				menusub = 3;
 				OsdClear();
 				OsdEnable(DISABLE_KEYBOARD);
+				if (save_failed || degauss_resume_after_script || returning)
+					degauss_script_error(save_failed ? "Cannot write script launcher"
+						: "Cannot start native script");
 			}
 			else if (!ttypid)
 			{
+				// A native script needs its own session for agetty to acquire
+				// tty2 and deliver Ctrl-C to its foreground process group.
+				if (!degauss_running && setsid() < 0)
+				{
+					perror("Native script terminal session");
+					_exit(1);
+				}
 				if (degauss_running)
 				{
+					if (setenv("DEGAUSS_SCRIPT_HANDOVER", "1", 1))
+					{
+						perror("Degauss script handover environment");
+						_exit(1);
+					}
+					if (setenv("DEGAUSS_NATIVE_SCRIPTS", "1", 1))
+					{
+						perror("Degauss native Scripts environment");
+						_exit(1);
+					}
 					// -i drops the issue file, -n the login prompt: between
 					// them they are the "Welcome to MiSTer" and "login: root
 					// (automatic login)" that would otherwise flash up
@@ -7995,7 +8131,7 @@ void HandleUI(void)
 	case MENU_SCRIPTS_FB2:
 		if (ttypid)
 		{
-			if (waitpid(ttypid, 0, WNOHANG) > 0)
+			if (waitpid(ttypid, &ttystatus, WNOHANG) > 0)
 			{
 				ttypid = 0;
 				user_io_osd_key_enable(1);
@@ -8012,6 +8148,15 @@ void HandleUI(void)
 					menusub = 3;
 					OsdClear();
 					OsdEnable(DISABLE_KEYBOARD);
+					if (WIFEXITED(ttystatus) && WEXITSTATUS(ttystatus) == DEGAUSS_NATIVE_SCRIPT_EXIT)
+					{
+						if (degauss_native_script_request(selPath, sizeof(selPath)))
+						{
+							degauss_resume_after_script = true;
+							menustate = MENU_SCRIPTS_FB;
+						}
+						else degauss_script_error("Invalid script handover");
+					}
 				}
 			}
 		}
@@ -8025,6 +8170,13 @@ void HandleUI(void)
 				menusub = 3;
 				OsdClear();
 				OsdEnable(DISABLE_KEYBOARD);
+				if (degauss_resume_after_script)
+				{
+					degauss_resume_after_script = false;
+					degauss_starting_script_return = true;
+					snprintf(selPath, sizeof(selPath), "%s", DEGAUSS_SCRIPT_RETURN);
+					menustate = MENU_SCRIPTS_FB;
+				}
 			}
 		}
 		break;

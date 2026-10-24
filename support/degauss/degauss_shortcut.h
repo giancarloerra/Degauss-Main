@@ -21,6 +21,8 @@ enum DegaussShortcutLoadState
 DegaussShortcutLoadState degauss_shortcut_load_state(void);
 uint16_t degauss_shortcut_keyboard_key(void);
 bool degauss_shortcut_set_keyboard(uint16_t key);
+uint16_t degauss_shortcut_controller_button(void);
+bool degauss_shortcut_set_controller(uint16_t button);
 bool degauss_shortcut_reset(void);
 
 // Keyboard capture is initiated by the OSD and completed by a physical Linux
@@ -28,9 +30,16 @@ bool degauss_shortcut_reset(void);
 void degauss_shortcut_begin_keyboard_capture(void);
 void degauss_shortcut_cancel_keyboard_capture(void);
 bool degauss_shortcut_take_keyboard_capture(uint16_t *key);
+void degauss_shortcut_begin_controller_capture(void);
+bool degauss_shortcut_take_controller_capture(uint16_t *button);
 
 // The input hook returns true when the current event must not reach the core.
 bool degauss_shortcut_handle_keyboard_event(uint16_t key, int value, bool menu_event);
+// Ordinary controller events always continue to the game. Only assignment
+// capture in the OSD consumes an event.
+bool degauss_shortcut_handle_controller_event(unsigned device, uint16_t button, int value);
+void degauss_shortcut_reset_controllers(void);
+void degauss_shortcut_poll_controllers(void);
 
 // The input path only records a request. HandleUI performs the core load.
 bool degauss_shortcut_take_request(void);

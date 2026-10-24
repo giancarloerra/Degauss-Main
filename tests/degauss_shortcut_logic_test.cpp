@@ -136,10 +136,64 @@ static void test_keyboard_runtime()
 	assert(high_key_state.event(braille_dot_1, braille_dot_1, 0, false, triggered));
 }
 
+static void test_hold_config()
+{
+	const ConfigV2 config = make_hold_config(87, 0x130);
+	assert(config_valid(config));
+	assert(config.keyboard_key == 87);
+	assert(config.controller_button == 0x130);
+	ConfigV2 invalid = config;
+	invalid.controller_button = 87;
+	assert(!config_valid(invalid));
+	invalid = config;
+	invalid.reserved = 1;
+	assert(!config_valid(invalid));
+	assert(config_valid(make_hold_config(0, 0)));
+	// A legacy controller assignment must stay disabled after migration.
+	ConfigV1 legacy = make_config(87);
+	legacy.legacy_controller_button = 8;
+	assert(config_valid(legacy));
+	const ConfigV2 migrated = make_hold_config(legacy.keyboard_key, 0);
+	assert(migrated.keyboard_key == legacy.keyboard_key);
+	assert(!migrated.controller_button);
+}
+
+static void test_controller_hold()
+{
+	ControllerHoldState first, second;
+	first.event(1, true, 100);
+	assert(!first.poll(true, 5099));
+	first.event(2, true, 2000); // Autorepeat must not restart or trigger a hold.
+	assert(first.poll(true, 5100));
+	assert(!first.poll(true, 12000));
+	first.event(0, true, 12001);
+	assert(!first.poll(true, 20000));
+	first.event(1, true, 20001);
+	first.event(0, true, 24999);
+	assert(!first.poll(true, 25001));
+	first.event(1, true, 30000);
+	assert(!first.poll(false, 34000)); // OSD, disconnect, or lost eligibility resets.
+	assert(!first.poll(true, 36000));
+	first.event(1, false, 40000);
+	assert(!first.poll(true, 50000));
+	first.event(1, true, UINT32_MAX - 100);
+	assert(!first.poll(true, 4898));
+	assert(first.poll(true, 4899)); // Monotonic counter rollover.
+	first.reset();
+	first.event(1, true, 0);
+	second.event(1, true, 4000);
+	first.event(0, true, 4500);
+	assert(!first.poll(true, 5000));
+	assert(!second.poll(true, 5000));
+	assert(second.poll(true, 9000)); // Different devices never combine hold time.
+}
+
 int main()
 {
 	test_config_validation();
 	test_runtime_conditions_and_request();
 	test_keyboard_runtime();
+	test_hold_config();
+	test_controller_hold();
 	return 0;
 }
