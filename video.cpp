@@ -215,6 +215,7 @@ static_assert(sizeof(vmode_custom_param_t) == sizeof(vmode_custom_t::item));
 
 // Static fwd decl
 static void video_fb_config();
+static bool video_degauss_native_fb_active();
 static void video_calculate_cvt(int horiz_pixels, int vert_pixels, float refresh_rate, int reduced_blanking, vmode_custom_t *vmode);
 
 static vmode_custom_t v_cur = {}, v_def = {}, v_pal = {}, v_ntsc = {};
@@ -3640,7 +3641,8 @@ static void set_yc_mode()
 		snprintf(yc_key_expand, sizeof(yc_key_expand), "%s_%.2f", yc_key, prate);
 		printf("Calculated %sYC parameters for '%s': %s PHASE_INC=%lld, COLORBURST_START=%d, COLORBURST_END=%d\n", scaler_timing ? "scaler " : "", yc_key, pal ? "PAL" : (cfg.ntsc_mode == 1) ? "PAL60" : (cfg.ntsc_mode == 2) ? "PAL-M" : "NTSC", PHASE_INC, COLORBURST_START, COLORBURST_END);
 
-		for (uint i = 0; !scaler_timing && i < sizeof(yc_modes) / sizeof(yc_modes[0]); i++)
+		// Legacy Menu overrides use another clock; retain the native calculation.
+		for (uint i = 0; !scaler_timing && !video_degauss_native_fb_active() && i < sizeof(yc_modes) / sizeof(yc_modes[0]); i++)
 		{
 		if (!strcasecmp(yc_modes[i].key, yc_key) || !strcasecmp(yc_modes[i].key, yc_key_expand))
 			{

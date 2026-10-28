@@ -86,11 +86,16 @@ setting and its once-per-Linux-boot attempt.
 
 ## Local verification
 
+Native analog framebuffer output uses its measured colour-clock calculation,
+not ordinary Menu's clock-specific `yc.txt` overrides. Ordinary Menu and game
+core overrides, shared-scaler output and Direct Video keep their existing paths.
+
 The pure configuration and input-state logic is independent of Main's ARM
 dependencies and can be checked on the host:
 
 ```bash
 ./tests/run-degauss-shortcut-tests.sh
+python3 tests/run-degauss-yc-tests.py
 python3 tests/run-degauss-core-menu-tests.py
 python3 tests/degauss_script_handover_test.py
 python3 tests/degauss_native_scripts_test.py

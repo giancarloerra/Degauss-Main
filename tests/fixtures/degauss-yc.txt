@@ -1,0 +1,11 @@
+; MENU and NES entries from MiSTer-devel/Distribution_MiSTer/yc.txt.
+; Source Git blob: a5affca4b9c7fe2c0e2a85bb62cd25240dd879f4
+; Both Main variants read this same card-root table, not RA's older source copy.
+NES_60.1=91625968981 ;Alternative reduced Dot Crawl from real system:NES_60.1=91626225369
+NES_50.0=114532461227
+NES_50.5=113487382000
+MENU_59.8=196786767482
+MENU_50.2=243746729900
+MENU_60.0=145620875904
+MENU_59.9i=145622662586
+NES_60.1s=113492149000
