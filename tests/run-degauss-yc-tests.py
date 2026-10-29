@@ -51,7 +51,7 @@ static_assert(sizeof(main_int64_t) == sizeof(int64_t), "64-bit target word requi
 #endif
 struct yc_mode { char key[64]; int64_t phase_inc; };
 static yc_mode yc_modes[20] = {};
-static struct { int vga_mode_int, vga_scaler, ntsc_mode; bool degauss_native_analog; } cfg = {};
+static struct { int vga_mode_int, vga_scaler, ntsc_mode; bool degauss_native_analog, direct_video; } cfg = {};
 static struct { uint32_t width, ptime, frame_clocks, vtime, ctime; bool interlaced; }
     current_video_info = {};
 static struct {
@@ -59,14 +59,13 @@ static struct {
     double Fpix;
 } v_cur = {};
 static bool menu_core = true, degauss_native_fb = false;
-static bool direct_video = false;
 static unsigned yc_updates = 0, fb_configurations = 0;
 static int vga_fb = 0;
 static const char *core_name = "MENU";
 static std::vector<uint16_t> words;
 static bool is_menu() { return menu_core; }
 static int get_vga_fb() { return vga_fb; }
-static bool video_is_direct() { return direct_video; }
+static bool video_is_direct() { return cfg.direct_video; }
 static void video_fb_config() { ++fb_configurations; }
 static const char *user_io_get_core_name(int) { return core_name; }
 constexpr int UIO_SET_YC_PAR = 0x41;
@@ -99,7 +98,7 @@ static uint64_t phase() {
 static uint64_t output() { set_yc_mode(); return phase(); }
 static void native_case(const char *table, int mode, bool pal, bool custom) {
     menu_core = true; core_name = "MENU"; degauss_native_fb = true;
-    cfg = {mode, 0, 0, true}; vga_fb = 0;
+    cfg = {mode, 0, 0, true, false}; vga_fb = 0;
     assert(video_degauss_native_fb_active());
     current_video_info = {};
     current_video_info.width = 1058;
@@ -160,11 +159,11 @@ int main(int argc, char **argv) {
         video_set_degauss_native_fb(true);
         assert(yc_updates == updates); // RGB/component handovers remain untouched.
     }
-    cfg.vga_mode_int = 2; direct_video = true;
+    cfg.vga_mode_int = 2; cfg.direct_video = true;
     unsigned updates = yc_updates;
     video_set_degauss_native_fb(false);
     assert(yc_updates == updates); // Direct Video retains its existing enable path.
-    direct_video = false;
+    cfg.direct_video = false;
     cfg.degauss_native_analog = false;
     unsigned configurations = fb_configurations;
     video_set_degauss_native_fb(true);
