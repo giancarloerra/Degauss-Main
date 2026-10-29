@@ -4160,7 +4160,10 @@ void video_set_degauss_native_fb(bool enable)
 	if (degauss_native_fb == enable) return;
 	degauss_native_fb = enable;
 	video_fb_config();
-	if (!video_is_direct() && cfg.vga_mode_int >= 2)
+	// The first video-info poll supplies native timing and performs its refresh.
+	if (!video_is_direct() && cfg.vga_mode_int >= 2 &&
+		(cfg.vga_scaler || (current_video_info.ptime && current_video_info.vtime &&
+			(current_video_info.frame_clocks || current_video_info.ctime))))
 		set_yc_mode();
 }
 

@@ -130,6 +130,16 @@ static void native_case(const char *table, int mode, bool pal, bool custom) {
 }
 int main(int argc, char **argv) {
     assert(argc == 2);
+    // Main starts the frontend before its first video-info poll. Defer native
+    // refreshes until that poll supplies the measurements used by the carrier.
+    for (int mode : {2, 3, 4}) {
+        cfg = {mode, 0, 0, true, false}; current_video_info = {};
+        degauss_native_fb = false;
+        unsigned updates = yc_updates;
+        video_set_degauss_native_fb(true);
+        video_set_degauss_native_fb(false);
+        assert(yc_updates == updates);
+    }
     for (int mode : {2, 3, 4}) for (bool pal : {false, true})
         native_case(argv[1], mode, pal, false);
     for (int mode : {2, 3, 4}) native_case(argv[1], mode, false, true);
