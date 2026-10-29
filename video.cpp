@@ -4160,6 +4160,8 @@ void video_set_degauss_native_fb(bool enable)
 	if (degauss_native_fb == enable) return;
 	degauss_native_fb = enable;
 	video_fb_config();
+	if (!video_is_direct() && cfg.vga_mode_int >= 2)
+		set_yc_mode();
 }
 
 static void draw_checkers()

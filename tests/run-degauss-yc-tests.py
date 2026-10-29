@@ -27,6 +27,7 @@ for signature in ('static uint64_t div_round_u64(', 'static uint64_t calc_frame_
         production += '\n' + function(video, signature)
 production += '\n' + function(video, 'static bool get_scaler_yc_timing(')
 production += '\n' + function(video, 'static void set_yc_mode()\n{')
+production += '\n' + function(video, 'void video_set_degauss_native_fb(bool enable)')
 
 prefix = r'''
 #include <cassert>
@@ -50,7 +51,7 @@ static_assert(sizeof(main_int64_t) == sizeof(int64_t), "64-bit target word requi
 #endif
 struct yc_mode { char key[64]; int64_t phase_inc; };
 static yc_mode yc_modes[20] = {};
-static struct { int vga_mode_int, vga_scaler, ntsc_mode; } cfg = {};
+static struct { int vga_mode_int, vga_scaler, ntsc_mode; bool degauss_native_analog; } cfg = {};
 static struct { uint32_t width, ptime, frame_clocks, vtime, ctime; bool interlaced; }
     current_video_info = {};
 static struct {
@@ -58,15 +59,19 @@ static struct {
     double Fpix;
 } v_cur = {};
 static bool menu_core = true, degauss_native_fb = false;
+static bool direct_video = false;
+static unsigned yc_updates = 0, fb_configurations = 0;
 static int vga_fb = 0;
 static const char *core_name = "MENU";
 static std::vector<uint16_t> words;
 static bool is_menu() { return menu_core; }
 static int get_vga_fb() { return vga_fb; }
+static bool video_is_direct() { return direct_video; }
+static void video_fb_config() { ++fb_configurations; }
 static const char *user_io_get_core_name(int) { return core_name; }
 constexpr int UIO_SET_YC_PAR = 0x41;
-static void spi_uio_cmd_cont(int command) { assert(command == UIO_SET_YC_PAR); words.clear(); }
-static void spi_uio_cmd8(int command, int value) { assert(command == UIO_SET_YC_PAR); words = {uint16_t(value)}; }
+static void spi_uio_cmd_cont(int command) { assert(command == UIO_SET_YC_PAR); ++yc_updates; words.clear(); }
+static void spi_uio_cmd8(int command, int value) { assert(command == UIO_SET_YC_PAR); ++yc_updates; words = {uint16_t(value)}; }
 static void spi_w(uint16_t value) { words.push_back(value); }
 static void DisableIO() {}
 #define CHAR_IS_LINEEND(c) ((c) == '\n' || (c) == '\r')
@@ -94,7 +99,7 @@ static uint64_t phase() {
 static uint64_t output() { set_yc_mode(); return phase(); }
 static void native_case(const char *table, int mode, bool pal, bool custom) {
     menu_core = true; core_name = "MENU"; degauss_native_fb = true;
-    cfg = {mode, 0, 0}; vga_fb = 0;
+    cfg = {mode, 0, 0, true}; vga_fb = 0;
     assert(video_degauss_native_fb_active());
     current_video_info = {};
     current_video_info.width = 1058;
@@ -129,6 +134,41 @@ int main(int argc, char **argv) {
     for (int mode : {2, 3, 4}) for (bool pal : {false, true})
         native_case(argv[1], mode, pal, false);
     for (int mode : {2, 3, 4}) native_case(argv[1], mode, false, true);
+
+    // Native/script/exit handovers must transmit the new selection even when
+    // the video-info and framebuffer metadata have not changed.
+    for (int mode : {2, 3, 4}) for (bool pal : {false, true}) {
+        assert(!video_is_direct());
+        native_case(argv[1], mode, pal, false);
+        const uint64_t calculated = phase();
+        unsigned updates = yc_updates, configurations = fb_configurations;
+        video_set_degauss_native_fb(false);
+        assert(!video_degauss_native_fb_active());
+        assert(fb_configurations == configurations + 1);
+        assert(yc_updates == updates + 1);
+        assert(phase() != calculated);
+        video_set_degauss_native_fb(true);
+        assert(video_degauss_native_fb_active());
+        assert(yc_updates == updates + 2 && phase() == calculated);
+        video_set_degauss_native_fb(true);
+        assert(yc_updates == updates + 2); // No redundant write for unchanged state.
+    }
+    for (int mode : {0, 1}) {
+        cfg.vga_mode_int = mode;
+        unsigned updates = yc_updates;
+        video_set_degauss_native_fb(false);
+        video_set_degauss_native_fb(true);
+        assert(yc_updates == updates); // RGB/component handovers remain untouched.
+    }
+    cfg.vga_mode_int = 2; direct_video = true;
+    unsigned updates = yc_updates;
+    video_set_degauss_native_fb(false);
+    assert(yc_updates == updates); // Direct Video retains its existing enable path.
+    direct_video = false;
+    cfg.degauss_native_analog = false;
+    unsigned configurations = fb_configurations;
+    video_set_degauss_native_fb(true);
+    assert(!degauss_native_fb && fb_configurations == configurations);
 
     // Game-core calibration remains independent of the private Menu flag.
     core_name = "NES"; menu_core = false; degauss_native_fb = true;

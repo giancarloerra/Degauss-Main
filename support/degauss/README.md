@@ -89,6 +89,8 @@ setting and its once-per-Linux-boot attempt.
 Native analog framebuffer output uses its measured colour-clock calculation,
 not ordinary Menu's clock-specific `yc.txt` overrides. Ordinary Menu and game
 core overrides, shared-scaler output and Direct Video keep their existing paths.
+Native-state transitions resend Y/C parameters without waiting for video-info
+metadata to change. RGB/component and unchanged-state transitions add no writes.
 
 The pure configuration and input-state logic is independent of Main's ARM
 dependencies and can be checked on the host:
