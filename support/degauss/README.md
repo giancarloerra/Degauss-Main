@@ -28,7 +28,7 @@ frontend-only profiles through `degauss_controller` commands. Responses are
 versioned status records in `/tmp`; the frontend owns persistence in its
 `settings.toml`. Main's native menu and game mappings are never overwritten.
 Custom profiles contain complete saved controls and labels, including copied
-D-pad/stick alternatives. They are validated before activation and do not merge
+D-pad, mouse-navigation and stick alternatives. They are validated before activation and do not merge
 later native mapping changes. Native mode continues to follow MiSTer's mapping.
 Profiles stop applying when the native OSD, a script or a game owns input.
 The active-controller report lets the frontend display the effective bindings

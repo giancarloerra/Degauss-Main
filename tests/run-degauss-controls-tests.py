@@ -303,12 +303,12 @@ with tempfile.TemporaryDirectory(prefix="degauss-control-snapshot-") as temporar
                     "-fsanitize=address,undefined", str(unit), "-o", str(binary)], check=True)
     subprocess.run([str(binary)], check=True)
 
-native_start = source.index("static degauss_controls::Bindings degauss_controller_native(")
-native_function = source[native_start:source.index("\n}\n", native_start) + 3]
 alternate_start = source.index("static std::array<uint16_t, 4> degauss_controller_native_alternates(")
-alternate_function = source[alternate_start:source.index("\n}\n", alternate_start) + 3]
+native_start = source.index("static degauss_controls::Bindings degauss_controller_native(")
+native_function = source[alternate_start:source.index("\n}\n", native_start) + 3]
 definitions = "\n".join(line for line in (ROOT / "input.h").read_text().splitlines()
                         if line.startswith("#define SYS_BTN_") or line.startswith("#define SYS_AXIS_")
+                        or line.startswith("#define SYS_MS_")
                         or line.startswith("#define KEY_EMU "))
 native_harness = r'''
 #include <linux/input.h>
@@ -320,6 +320,7 @@ static struct { uint32_t mmap[32]; int quirk; } input[1] = {};
 native_cases = r'''
 int main() {
     input[0].mmap[SYS_BTN_UP] = 300;
+    input[0].mmap[SYS_MS_UP] = 301;
     input[0].mmap[SYS_AXIS_X] = 0x20000;
     input[0].mmap[SYS_AXIS_Y] = 0x20001;
     auto primary = degauss_controller_native(0);
@@ -328,11 +329,23 @@ int main() {
     assert(primary[degauss_controls::LEFT] == KEY_EMU);
     assert(alternate[degauss_controls::LEFT] == KEY_EMU);
     assert(alternate[degauss_controls::UP] == KEY_EMU + 2);
+    auto controls = degauss_controller_native_controls(0);
+    assert((controls[degauss_controls::UP] == std::array<uint16_t, 3>{{300, 301, KEY_EMU + 2}}));
     input[0].mmap[SYS_BTN_L] = 310;
     input[0].mmap[SYS_BTN_MENU_FUNC] = 310;
     primary = degauss_controller_native(0);
     assert(primary[degauss_controls::SELECT] == 310);
     assert(!primary[degauss_controls::PAGE_PREVIOUS]); // native OK wins over the same shoulder's page action
+    input[0].mmap[SYS_MS_LEFT] = 302;
+    assert(degauss_controller_native(0)[degauss_controls::LEFT] == 302); // mouse navigation precedes stick fallback
+    input[0].mmap[SYS_BTN_START] = 302;
+    assert(degauss_controller_native(0)[degauss_controls::LEFT] == KEY_EMU); // Start consumes this key without a frontend action
+    input[0].mmap[SYS_MS_LEFT] = 0;
+    input[0].mmap[SYS_MS_UP] = KEY_EMU;
+    controls = degauss_controller_native_controls(0);
+    assert(!controls[degauss_controls::LEFT][0]); // earlier mouse Up owns the same physical code
+    assert(controls[degauss_controls::UP][1] == KEY_EMU);
+    input[0].mmap[SYS_MS_UP] = 0;
     input[0].mmap[SYS_AXIS_X] = UINT32_MAX;
     input[0].mmap[SYS_AXIS_Y] = UINT32_MAX;
     assert(!degauss_controller_native_alternates(0)[degauss_controls::LEFT]);
@@ -342,7 +355,7 @@ int main() {
 if sys.platform.startswith("linux"):
     with tempfile.TemporaryDirectory(prefix="degauss-control-native-copy-") as temporary:
         unit = Path(temporary) / "native.cpp"
-        unit.write_text(native_harness + definitions + '\n' + native_function + alternate_function + native_cases)
+        unit.write_text(native_harness + definitions + '\n' + native_function + native_cases)
         binary = Path(temporary) / "native"
         subprocess.run(["c++", "-std=c++14", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT),
                         "-fsanitize=address,undefined", str(unit), "-o", str(binary)], check=True)

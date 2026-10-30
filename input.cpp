@@ -2080,39 +2080,6 @@ static std::string degauss_controller_identity(int dev)
 	return id;
 }
 
-static degauss_controls::Bindings degauss_controller_native(int dev)
-{
-	const uint32_t *map = input[dev].mmap;
-	auto result = degauss_controls::Bindings{{static_cast<uint16_t>(map[SYS_BTN_UP]), static_cast<uint16_t>(map[SYS_BTN_DOWN]),
-		static_cast<uint16_t>(map[SYS_BTN_LEFT]), static_cast<uint16_t>(map[SYS_BTN_RIGHT]),
-		static_cast<uint16_t>((map[SYS_BTN_MENU_FUNC] & 0xFFFF) ? map[SYS_BTN_MENU_FUNC] : map[SYS_BTN_A]),
-		static_cast<uint16_t>((map[SYS_BTN_MENU_FUNC] >> 16) ? (map[SYS_BTN_MENU_FUNC] >> 16) : map[SYS_BTN_B]),
-		static_cast<uint16_t>(map[SYS_BTN_X]), static_cast<uint16_t>(map[SYS_BTN_Y]),
-		static_cast<uint16_t>(map[SYS_BTN_L]), static_cast<uint16_t>(map[SYS_BTN_R])}};
-	if (input[dev].quirk != QUIRK_WHEEL) {
-		const uint16_t x = map[SYS_AXIS_X] && static_cast<uint16_t>(map[SYS_AXIS_X]) < ABS_CNT ? KEY_EMU + static_cast<uint16_t>(map[SYS_AXIS_X]) * 2 : 0;
-		const uint16_t y = map[SYS_AXIS_Y] && static_cast<uint16_t>(map[SYS_AXIS_Y]) < ABS_CNT ? KEY_EMU + static_cast<uint16_t>(map[SYS_AXIS_Y]) * 2 : 0;
-		if (!result[degauss_controls::UP]) result[degauss_controls::UP] = y;
-		if (!result[degauss_controls::DOWN] && y) result[degauss_controls::DOWN] = y + 1;
-		if (!result[degauss_controls::LEFT]) result[degauss_controls::LEFT] = x;
-		if (!result[degauss_controls::RIGHT] && x) result[degauss_controls::RIGHT] = x + 1;
-	}
-	// Match the native handler's priority, including Menu OK/Back overrides.
-	// A shoulder used for OK cannot also reach its lower-priority page action.
-	const unsigned priority[] = {degauss_controls::SELECT, degauss_controls::BACK,
-		degauss_controls::ACTIONS, degauss_controls::MENU, degauss_controls::PAGE_PREVIOUS,
-		degauss_controls::PAGE_NEXT, degauss_controls::RIGHT, degauss_controls::LEFT,
-		degauss_controls::DOWN, degauss_controls::UP};
-	for (unsigned at = 0; at < degauss_controls::ROLE_COUNT; ++at) {
-		const unsigned role = priority[at];
-		if (role < degauss_controls::SELECT && result[role]
-			&& (result[role] == map[SYS_BTN_START] || result[role] == map[SYS_BTN_SELECT])) result[role] = 0;
-		for (unsigned previous = 0; previous < at; ++previous)
-			if (result[role] && result[role] == result[priority[previous]]) result[role] = 0;
-	}
-	return result;
-}
-
 static std::array<uint16_t, 4> degauss_controller_native_alternates(int dev)
 {
 	std::array<uint16_t, 4> result{};
@@ -2126,12 +2093,45 @@ static std::array<uint16_t, 4> degauss_controller_native_alternates(int dev)
 			result[role + 1] = result[role] + 1;
 		}
 	}
-	const auto primary = degauss_controller_native(dev);
-	for (unsigned role = 0; role < result.size(); ++role) if (result[role]) {
-		if (result[role] == input[dev].mmap[SYS_BTN_START] || result[role] == input[dev].mmap[SYS_BTN_SELECT]) result[role] = 0;
-		for (unsigned other = 0; other < primary.size(); ++other)
-			if (other != role && result[role] == primary[other]) result[role] = 0;
-	}
+	return result;
+}
+
+using DegaussNativeControls = std::array<std::array<uint16_t, degauss_controls::DIRECTION_BINDINGS>, degauss_controls::ROLE_COUNT>;
+
+static DegaussNativeControls degauss_controller_native_controls(int dev)
+{
+	DegaussNativeControls result{};
+	unsigned counts[degauss_controls::ROLE_COUNT] = {};
+	const uint32_t *map = input[dev].mmap;
+	const auto add = [&](unsigned role, uint32_t code) {
+		if (!code || code > UINT16_MAX) return;
+		if (role < degauss_controls::SELECT && (code == map[SYS_BTN_START] || code == map[SYS_BTN_SELECT])) return;
+		for (const auto &bindings : result) for (auto previous : bindings) if (previous == code) return;
+		result[role][counts[role]++] = static_cast<uint16_t>(code);
+	};
+	// Preserve the native handler's priority and every reachable alternative.
+	add(degauss_controls::SELECT, (map[SYS_BTN_MENU_FUNC] & 0xFFFF) ? (map[SYS_BTN_MENU_FUNC] & 0xFFFF) : map[SYS_BTN_A]);
+	add(degauss_controls::BACK, (map[SYS_BTN_MENU_FUNC] >> 16) ? (map[SYS_BTN_MENU_FUNC] >> 16) : map[SYS_BTN_B]);
+	add(degauss_controls::ACTIONS, map[SYS_BTN_X]);
+	add(degauss_controls::MENU, map[SYS_BTN_Y]);
+	add(degauss_controls::PAGE_PREVIOUS, map[SYS_BTN_L]);
+	add(degauss_controls::PAGE_NEXT, map[SYS_BTN_R]);
+	const unsigned directions[] = {degauss_controls::RIGHT, degauss_controls::LEFT, degauss_controls::DOWN, degauss_controls::UP};
+	for (unsigned i = 0; i < 4; ++i) add(directions[i], map[i]);
+	for (unsigned i = 0; i < 4; ++i) add(directions[i], map[SYS_MS_RIGHT + i]);
+	const auto axes = degauss_controller_native_alternates(dev);
+	add(degauss_controls::LEFT, axes[degauss_controls::LEFT]);
+	add(degauss_controls::RIGHT, axes[degauss_controls::RIGHT]);
+	add(degauss_controls::UP, axes[degauss_controls::UP]);
+	add(degauss_controls::DOWN, axes[degauss_controls::DOWN]);
+	return result;
+}
+
+static degauss_controls::Bindings degauss_controller_native(int dev)
+{
+	const auto controls = degauss_controller_native_controls(dev);
+	degauss_controls::Bindings result{};
+	for (unsigned role = 0; role < result.size(); ++role) result[role] = controls[role][0];
 	return result;
 }
 
@@ -2229,14 +2229,18 @@ static void degauss_controller_encode(std::vector<uint8_t> &out, int dev)
 		&& (i == dev || input[i].bind == dev)) paths.push_back(input[i].devname);
 	degauss_controls::word(out, paths.size());
 	for (const auto &path : paths) degauss_controls::text(out, path);
-	const auto native = degauss_controller_native(dev);
-	const auto alternates = degauss_controller_native_alternates(dev);
+	const auto native = degauss_controller_native_controls(dev);
 	const auto effective = degauss_controller_effective(dev);
-	for (auto code : native) degauss_controls::word(out, code);
-	for (auto code : alternates) degauss_controls::word(out, code);
+	for (const auto &role : native) {
+		unsigned count = 0;
+		for (auto code : role) if (code) ++count;
+		degauss_controls::word(out, count);
+		for (auto code : role) if (code) {
+			degauss_controls::word(out, code);
+			degauss_controls::text(out, degauss_controller_label(dev, code));
+		}
+	}
 	for (auto code : effective) degauss_controls::word(out, code);
-	for (auto code : native) degauss_controls::text(out, degauss_controller_label(dev, code));
-	for (auto code : alternates) degauss_controls::text(out, degauss_controller_label(dev, code));
 	for (unsigned role = 0; role < degauss_controls::ROLE_COUNT; ++role)
 		degauss_controls::text(out, profile ? profile->label(role) : degauss_controller_label(dev, effective[role]));
 }

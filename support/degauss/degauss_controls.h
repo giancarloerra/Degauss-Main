@@ -11,6 +11,7 @@
 namespace degauss_controls {
 
 constexpr unsigned ROLE_COUNT = 10;
+constexpr unsigned DIRECTION_BINDINGS = 3;
 constexpr unsigned MAX_DEVICES = 30;
 enum Role { UP, DOWN, LEFT, RIGHT, SELECT, BACK, ACTIONS, MENU, PAGE_PREVIOUS, PAGE_NEXT };
 using Bindings = std::array<uint16_t, ROLE_COUNT>;
@@ -32,7 +33,7 @@ inline void text(std::vector<uint8_t> &out, const std::string &value)
 inline std::vector<uint8_t> reply(const char *magic)
 {
 	std::vector<uint8_t> out(magic, magic + 4);
-	word(out, 2);
+	word(out, 3);
 	return out;
 }
 
@@ -76,7 +77,7 @@ inline bool validate(const Controls &bindings, std::string &error)
 			error = "A required direction, Select or Back is unassigned";
 			return false;
 		}
-		if (bindings[i].size() > (i < SELECT ? 2U : 1U)) {
+		if (bindings[i].size() > (i < SELECT ? DIRECTION_BINDINGS : 1U)) {
 			error = "Too many bindings for a Degauss control"; return false;
 		}
 		for (unsigned at = 0; at < bindings[i].size(); ++at) {
@@ -112,7 +113,7 @@ public:
 		Reader reader{data};
 		reader.at = 4;
 		uint16_t version, count;
-		if (!reader.u16(version) || version != 2 || !reader.u16(count) || count > MAX_DEVICES) {
+		if (!reader.u16(version) || version != 3 || !reader.u16(count) || count > MAX_DEVICES) {
 			error = "Unsupported Degauss controller profile version or count";
 			return false;
 		}
@@ -125,7 +126,7 @@ public:
 			}
 			for (unsigned role = 0; role < ROLE_COUNT; ++role) {
 				uint16_t size;
-				if (!reader.u16(size) || size > (role < SELECT ? 2U : 1U)) {
+				if (!reader.u16(size) || size > (role < SELECT ? DIRECTION_BINDINGS : 1U)) {
 					error = "Invalid controller binding count"; return false;
 				}
 				for (unsigned n = 0; n < size; ++n) {
