@@ -2034,7 +2034,6 @@ static int keyrah_trans(int key, int press)
 
 static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int dev, bool menu_event = false);
 static void uinp_send_key(uint16_t key, int press);
-static void degauss_ensure_menu_mapping(int dev, int sub_dev);
 static void degauss_controller_snapshot(unsigned token);
 
 static degauss_controls::Store degauss_controller_profiles;
@@ -2160,22 +2159,40 @@ static bool degauss_controller_is_pad(int dev)
 {
 	if (pool[dev].fd < 0 || input[dev].mouse
 		|| (!JOYCON_COMBINED(dev) && input[dev].bind >= 0 && input[dev].bind != dev)) return false;
-	if (input[dev].force_joy) return true;
-	unsigned char keys[(KEY_CNT + 7) / 8] = {};
-	if (ioctl(pool[dev].fd, EVIOCGBIT(EV_KEY, sizeof(keys)), keys) < 0) return false;
-	for (unsigned code = BTN_MISC; code < KEY_CNT; ++code)
-		if (test_bit(code, keys)) return true;
-	unsigned char axes[(ABS_CNT + 7) / 8] = {};
-	if (ioctl(pool[dev].fd, EVIOCGBIT(EV_ABS, sizeof(axes)), axes) < 0) return false;
-	return test_bit(ABS_X, axes) || test_bit(ABS_Y, axes) || test_bit(ABS_HAT0X, axes);
+	for (int node = 0; node < NUMDEV; ++node) if (pool[node].fd >= 0 && !input[node].mouse
+		&& (node == dev || input[node].bind == dev)) {
+		if (input[node].force_joy) return true;
+		unsigned char keys[(KEY_CNT + 7) / 8] = {};
+		if (ioctl(pool[node].fd, EVIOCGBIT(EV_KEY, sizeof(keys)), keys) >= 0) {
+			if (input[dev].has_mmap) for (auto code : degauss_controller_native(dev))
+				if (code >= BTN_MISC && code < KEY_CNT && test_bit(code, keys)
+					&& (code < BTN_MOUSE || code >= BTN_JOYSTICK || input[dev].quirk == QUIRK_LIGHTGUN_MOUSE)) return true;
+			for (unsigned code = BTN_MISC; code < KEY_CNT; ++code) {
+				const bool button = code < BTN_MOUSE || (code >= BTN_JOYSTICK && code < BTN_DIGI)
+					|| (code >= BTN_WHEEL && code <= BTN_GEAR_UP)
+					|| (code >= BTN_DPAD_UP && code <= BTN_DPAD_RIGHT)
+					|| (code >= BTN_TRIGGER_HAPPY && code <= BTN_TRIGGER_HAPPY40);
+				if (button && test_bit(code, keys)) return true;
+			}
+		}
+		unsigned char axes[(ABS_CNT + 7) / 8] = {};
+		if (ioctl(pool[node].fd, EVIOCGBIT(EV_ABS, sizeof(axes)), axes) >= 0) {
+			if (input[dev].has_mmap) for (auto code : degauss_controller_native(dev)) {
+				const unsigned axis = code >= KEY_EMU ? (code - KEY_EMU) >> 1 : ABS_CNT;
+				if (axis < ABS_CNT && test_bit(axis, axes)) return true;
+			}
+			if (test_bit(ABS_X, axes) || test_bit(ABS_Y, axes)
+				|| test_bit(ABS_HAT0X, axes) || test_bit(ABS_HAT0Y, axes)) return true;
+		}
+	}
+	return false;
 }
 
 static void degauss_controller_encode(std::vector<uint8_t> &out, int dev)
 {
-	degauss_ensure_menu_mapping(dev, dev);
 	degauss_controls::word(out, dev);
 	const auto *profile = degauss_controller_profiles.find(degauss_controller_identity(dev));
-	degauss_controls::word(out, (input[dev].force_joy ? 1 : 0) | (profile ? 2 : 0));
+	degauss_controls::word(out, (input[dev].force_joy ? 1 : 0) | (profile ? 2 : 0) | (input[dev].has_mmap ? 4 : 0));
 	degauss_controls::text(out, degauss_controller_identity(dev));
 	degauss_controls::text(out, input[dev].name);
 	std::vector<std::string> paths;
@@ -2190,7 +2207,7 @@ static void degauss_controller_encode(std::vector<uint8_t> &out, int dev)
 	for (auto code : native) degauss_controls::text(out, degauss_controller_label(dev, code));
 	for (auto code : effective) degauss_controls::text(out, degauss_controller_label(dev, code));
 	std::string error;
-	if (profile) degauss_controls::validate(effective, error);
+	if (profile && input[dev].has_mmap) degauss_controls::validate(effective, error);
 	degauss_controls::text(out, error);
 }
 
@@ -2204,7 +2221,7 @@ static void degauss_controller_snapshot(unsigned token)
 		if (dev == degauss_controller_active_device) active = dev;
 	}
 	if (!token) degauss_controls::word(out, active);
-	if (!token) degauss_controls::word(out, degauss_controller_generation);
+	degauss_controls::word(out, degauss_controller_generation);
 	degauss_controls::word(out, devices.size());
 	for (int dev : devices) degauss_controller_encode(out, dev);
 	degauss_controller_reply(token, out);
@@ -2311,7 +2328,7 @@ static void degauss_controller_poll()
 
 static void degauss_controller_command(const char *command)
 {
-	unsigned token = 0, instance = 0;
+	unsigned token = 0, instance = 0, generation = 0;
 	char operation[16] = {}, extra = 0;
 	if (sscanf(command, "%u %15s", &token, operation) != 2
 		|| token < 100000000 || token >= 1000000000) return;
@@ -2326,9 +2343,13 @@ static void degauss_controller_command(const char *command)
 		else if (degauss_controller_capture) degauss_controller_cancel_capture();
 		else degauss_controller_reply(token, degauss_controls::reply("DGCX"));
 	} else if (!strcmp(operation, "capture")) {
-		if (sscanf(command, "%u %15s %u %c", &token, operation, &instance, &extra) != 3
+		if (sscanf(command, "%u %15s %u %u %c", &token, operation, &instance, &generation, &extra) != 4
 			|| instance >= NUMDEV || !degauss_controller_is_pad(instance)) {
 			degauss_controller_error(token, "The selected controller is unavailable");
+			return;
+		}
+		if (generation != degauss_controller_generation) {
+			degauss_controller_error(token, "Input devices changed. Refresh Controllers before remapping.");
 			return;
 		}
 		degauss_controller_cancel_capture();
@@ -2354,9 +2375,8 @@ static void degauss_controller_command(const char *command)
 		std::string error;
 		if (!candidate.read(bytes, error)) { degauss_controller_error(token, error); return; }
 		for (int dev = 0; dev < NUMDEV; ++dev) if (degauss_controller_is_pad(dev)) {
-			degauss_ensure_menu_mapping(dev, dev);
 			const auto *profile = candidate.find(degauss_controller_identity(dev));
-			if (profile && !degauss_controls::validate(profile->resolve(degauss_controller_native(dev)), error)) {
+			if (profile && input[dev].has_mmap && !degauss_controls::validate(profile->resolve(degauss_controller_native(dev)), error)) {
 				degauss_controller_error(token, error); return;
 			}
 		}
@@ -3293,78 +3313,6 @@ static void assign_player(int dev, int num, int force = 0)
 	printf("Device %s %sassigned to player %d\n", input[dev].id, force ? "forcebly " : "", input[dev].num);
 }
 
-static void degauss_ensure_menu_mapping(int dev, int sub_dev)
-{
-	if (!input[dev].has_mmap)
-	{
-		if (input[dev].quirk == QUIRK_TOUCHGUN)
-		{
-			memset(input[dev].mmap, 0, sizeof(input[dev].mmap));
-			input[dev].mmap[SYS_AXIS_MX] = -1;
-			input[dev].mmap[SYS_AXIS_MY] = -1;
-			input[dev].mmap[SYS_AXIS_X] = -1;
-			input[dev].mmap[SYS_AXIS_Y] = -1;
-		}
-		else if (input[dev].quirk != QUIRK_PDSP && input[dev].quirk != QUIRK_MSSP)
-		{
-			if (!load_map(get_map_name(dev, 1), &input[dev].mmap, sizeof(input[dev].mmap)))
-			{
-				if (!gcdb_map_for_controller(input[sub_dev].bustype, input[sub_dev].vid, input[sub_dev].pid, input[sub_dev].gcdb_version, pool[sub_dev].fd, input[dev].mmap))
-				{
-					memset(input[dev].mmap, 0, sizeof(input[dev].mmap));
-					memcpy(input[dev].mmap, def_mmap, sizeof(def_mmap));
-					//input[dev].has_mmap++;
-				}
-			} else {
-				gcdb_show_string_for_ctrl_map(input[sub_dev].bustype, input[sub_dev].vid, input[sub_dev].pid, input[sub_dev].gcdb_version, pool[sub_dev].fd, input[sub_dev].name, input[dev].mmap);
-			}
-			if (!input[dev].mmap[SYS_BTN_OSD_KTGL + 2]) input[dev].mmap[SYS_BTN_OSD_KTGL + 2] = input[dev].mmap[SYS_BTN_OSD_KTGL + 1];
-
-			if (input[dev].quirk == QUIRK_WHEEL)
-			{
-				input[dev].mmap[SYS_AXIS_MX] = -1;
-				input[dev].mmap[SYS_AXIS_MY] = -1;
-				input[dev].mmap[SYS_AXIS_X] = -1;
-				input[dev].mmap[SYS_AXIS_Y] = -1;
-				input[dev].mmap[SYS_AXIS1_X] = -1;
-				input[dev].mmap[SYS_AXIS1_Y] = -1;
-				input[dev].mmap[SYS_AXIS2_X] = -1;
-				input[dev].mmap[SYS_AXIS2_Y] = -1;
-			}
-			else
-			{
-				// "Stick 1: Tilt RIGHT/DOWN" skipped while defining the buttons: fall back to stick 1
-				// (as gamecontroller_db.cpp does), otherwise 0 == 0 matches the unmapped stick 2 slots
-				// and the Y axis ends up on the right stick.
-				if (!input[dev].mmap[SYS_AXIS_X]) input[dev].mmap[SYS_AXIS_X] = input[dev].mmap[SYS_AXIS1_X];
-				if (!input[dev].mmap[SYS_AXIS_Y]) input[dev].mmap[SYS_AXIS_Y] = input[dev].mmap[SYS_AXIS1_Y];
-
-				if (input[dev].mmap[SYS_AXIS_X] == input[dev].mmap[SYS_AXIS1_X])
-				{
-					input[dev].stick_l[0] = SYS_AXIS1_X;
-					if ((input[dev].mmap[SYS_AXIS2_X] >> 16) == 2) input[dev].stick_r[0] = SYS_AXIS2_X;
-				}
-				if (input[dev].mmap[SYS_AXIS_Y] == input[dev].mmap[SYS_AXIS1_Y])
-				{
-					input[dev].stick_l[1] = SYS_AXIS1_Y;
-					if ((input[dev].mmap[SYS_AXIS2_Y] >> 16) == 2) input[dev].stick_r[1] = SYS_AXIS2_Y;
-				}
-				if (input[dev].mmap[SYS_AXIS_X] == input[dev].mmap[SYS_AXIS2_X])
-				{
-					input[dev].stick_l[0] = SYS_AXIS2_X;
-					if ((input[dev].mmap[SYS_AXIS1_X] >> 16) == 2) input[dev].stick_r[0] = SYS_AXIS1_X;
-				}
-				if (input[dev].mmap[SYS_AXIS_Y] == input[dev].mmap[SYS_AXIS2_Y])
-				{
-					input[dev].stick_l[1] = SYS_AXIS2_Y;
-					if ((input[dev].mmap[SYS_AXIS1_Y] >> 16) == 2) input[dev].stick_r[1] = SYS_AXIS1_Y;
-				}
-			}
-		}
-		input[dev].has_mmap++;
-		degauss_controller_inventory_changed = true;
-	}
-}
 
 static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int dev, bool menu_event)
 {
@@ -3440,7 +3388,75 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 	int enter    = (ev->type == EV_KEY && ev->code == KEY_ENTER && !(mapping && mapping_type == 3 && mapping_button));
 	int origcode = ev->code;
 
-	degauss_ensure_menu_mapping(dev, sub_dev);
+	if (!input[dev].has_mmap)
+	{
+		if (input[dev].quirk == QUIRK_TOUCHGUN)
+		{
+			memset(input[dev].mmap, 0, sizeof(input[dev].mmap));
+			input[dev].mmap[SYS_AXIS_MX] = -1;
+			input[dev].mmap[SYS_AXIS_MY] = -1;
+			input[dev].mmap[SYS_AXIS_X] = -1;
+			input[dev].mmap[SYS_AXIS_Y] = -1;
+		}
+		else if (input[dev].quirk != QUIRK_PDSP && input[dev].quirk != QUIRK_MSSP)
+		{
+			if (!load_map(get_map_name(dev, 1), &input[dev].mmap, sizeof(input[dev].mmap)))
+			{
+				if (!gcdb_map_for_controller(input[sub_dev].bustype, input[sub_dev].vid, input[sub_dev].pid, input[sub_dev].gcdb_version, pool[sub_dev].fd, input[dev].mmap))
+				{
+					memset(input[dev].mmap, 0, sizeof(input[dev].mmap));
+					memcpy(input[dev].mmap, def_mmap, sizeof(def_mmap));
+					//input[dev].has_mmap++;
+				}
+			} else {
+				gcdb_show_string_for_ctrl_map(input[sub_dev].bustype, input[sub_dev].vid, input[sub_dev].pid, input[sub_dev].gcdb_version, pool[sub_dev].fd, input[sub_dev].name, input[dev].mmap);
+			}
+			if (!input[dev].mmap[SYS_BTN_OSD_KTGL + 2]) input[dev].mmap[SYS_BTN_OSD_KTGL + 2] = input[dev].mmap[SYS_BTN_OSD_KTGL + 1];
+
+			if (input[dev].quirk == QUIRK_WHEEL)
+			{
+				input[dev].mmap[SYS_AXIS_MX] = -1;
+				input[dev].mmap[SYS_AXIS_MY] = -1;
+				input[dev].mmap[SYS_AXIS_X] = -1;
+				input[dev].mmap[SYS_AXIS_Y] = -1;
+				input[dev].mmap[SYS_AXIS1_X] = -1;
+				input[dev].mmap[SYS_AXIS1_Y] = -1;
+				input[dev].mmap[SYS_AXIS2_X] = -1;
+				input[dev].mmap[SYS_AXIS2_Y] = -1;
+			}
+			else
+			{
+				// "Stick 1: Tilt RIGHT/DOWN" skipped while defining the buttons: fall back to stick 1
+				// (as gamecontroller_db.cpp does), otherwise 0 == 0 matches the unmapped stick 2 slots
+				// and the Y axis ends up on the right stick.
+				if (!input[dev].mmap[SYS_AXIS_X]) input[dev].mmap[SYS_AXIS_X] = input[dev].mmap[SYS_AXIS1_X];
+				if (!input[dev].mmap[SYS_AXIS_Y]) input[dev].mmap[SYS_AXIS_Y] = input[dev].mmap[SYS_AXIS1_Y];
+
+				if (input[dev].mmap[SYS_AXIS_X] == input[dev].mmap[SYS_AXIS1_X])
+				{
+					input[dev].stick_l[0] = SYS_AXIS1_X;
+					if ((input[dev].mmap[SYS_AXIS2_X] >> 16) == 2) input[dev].stick_r[0] = SYS_AXIS2_X;
+				}
+				if (input[dev].mmap[SYS_AXIS_Y] == input[dev].mmap[SYS_AXIS1_Y])
+				{
+					input[dev].stick_l[1] = SYS_AXIS1_Y;
+					if ((input[dev].mmap[SYS_AXIS2_Y] >> 16) == 2) input[dev].stick_r[1] = SYS_AXIS2_Y;
+				}
+				if (input[dev].mmap[SYS_AXIS_X] == input[dev].mmap[SYS_AXIS2_X])
+				{
+					input[dev].stick_l[0] = SYS_AXIS2_X;
+					if ((input[dev].mmap[SYS_AXIS1_X] >> 16) == 2) input[dev].stick_r[0] = SYS_AXIS1_X;
+				}
+				if (input[dev].mmap[SYS_AXIS_Y] == input[dev].mmap[SYS_AXIS2_Y])
+				{
+					input[dev].stick_l[1] = SYS_AXIS2_Y;
+					if ((input[dev].mmap[SYS_AXIS1_Y] >> 16) == 2) input[dev].stick_r[1] = SYS_AXIS1_Y;
+				}
+			}
+		}
+		input[dev].has_mmap++;
+		degauss_controller_inventory_changed = true;
+	}
 
 	if (!input[dev].has_map)
 	{

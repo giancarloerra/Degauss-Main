@@ -3,6 +3,7 @@
 
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +17,10 @@ with tempfile.TemporaryDirectory(prefix="degauss-controls-") as temporary:
     subprocess.run([str(binary)], check=True)
 
 source = (ROOT / "input.cpp").read_text()
+assert "degauss_ensure_menu_mapping" not in source
+encode_start = source.index("static void degauss_controller_encode(")
+encode = source[encode_start:source.index("\n}\n", encode_start)]
+assert "load_map(" not in encode and "gcdb_" not in encode
 callback = source.index("static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int dev, bool menu_event)\n{")
 shortcut = source.index("degauss_shortcut_handle_controller_event(sub_dev", callback)
 capture = source.index("degauss_controller_capture_key(dev, ev->code", callback)
@@ -107,4 +112,62 @@ with tempfile.TemporaryDirectory(prefix="degauss-control-routing-") as temporary
         "-fsanitize=address,undefined", str(unit), "-o", str(binary),
     ], check=True)
     subprocess.run([str(binary)], check=True)
+
+if sys.platform.startswith("linux"):
+    start = source.index("static bool degauss_controller_is_pad(")
+    inventory = source[start:source.index("\n}\n", start) + 3]
+    dependencies = r'''
+#include <linux/input.h>
+#include <cstring>
+#include <cassert>
+#include "support/degauss/degauss_controls.h"
+#define NUMDEV 4
+#define KEY_EMU (KEY_MAX + 1)
+#define JOYCON_COMBINED(dev) 0
+#define test_bit(bit, array) (array[(bit) / 8] & (1 << ((bit) % 8)))
+static constexpr int QUIRK_LIGHTGUN_MOUSE = 1;
+static struct { int fd; } pool[NUMDEV];
+static struct { bool mouse, force_joy, has_mmap; int bind, quirk; uint32_t mmap[10]; } input[NUMDEV] = {};
+static degauss_controls::Bindings degauss_controller_native(int dev) {
+    degauss_controls::Bindings result{}; result[0] = input[dev].mmap[0]; return result;
+}
+static int test_ioctl(int fd, unsigned long request, unsigned char *bits) {
+    memset(bits, 0, _IOC_SIZE(request));
+    const auto set = [&](unsigned code) { bits[code / 8] |= 1 << (code % 8); };
+    if (_IOC_NR(request) == _IOC_NR(EVIOCGBIT(EV_KEY, 0))) set(fd == 11 ? BTN_SOUTH : KEY_OK);
+    else if (fd == 13) set(ABS_HAT0X);
+    else set(ABS_VOLUME);
+    return 0;
+}
+#define ioctl test_ioctl
+'''
+    cases = r'''
+int main() {
+    for (int i = 0; i < NUMDEV; ++i) { pool[i].fd = 10 + i; input[i].bind = i; }
+    input[1].bind = 0;
+    assert(degauss_controller_is_pad(0)); // pad lives on a bound interface, not the primary keyboard node
+    assert(!degauss_controller_is_pad(1)); // one logical controller, not duplicate interface entries
+    assert(!input[0].has_mmap && !input[0].mmap[0]); // inventory never initialises or overwrites Main's mapping
+    assert(!degauss_controller_is_pad(2)); // multimedia keyboard is not a gamepad
+    assert(degauss_controller_is_pad(3)); // hat-only input
+    input[2].force_joy = true;
+    assert(degauss_controller_is_pad(2)); // explicit MiSTer keyboard-as-joystick setting
+    input[2].force_joy = false; input[2].has_mmap = true;
+    input[2].mmap[0] = BTN_SOUTH;
+    assert(!degauss_controller_is_pad(2)); // an unrelated default map does not turn a keyboard into a pad
+    input[2].mmap[0] = KEY_OK;
+    assert(degauss_controller_is_pad(2)); // a nonstandard control explicitly mapped by MiSTer
+    input[2].mmap[0] = KEY_EMU + ABS_VOLUME * 2;
+    assert(degauss_controller_is_pad(2)); // an axis explicitly configured for native menu navigation
+    pool[1].fd = -1;
+    assert(!degauss_controller_is_pad(0));
+}
+'''
+    with tempfile.TemporaryDirectory(prefix="degauss-control-inventory-") as temporary:
+        unit = Path(temporary) / "inventory.cpp"
+        unit.write_text(dependencies + inventory + cases)
+        binary = Path(temporary) / "inventory"
+        subprocess.run(["c++", "-std=c++14", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT),
+                        "-fsanitize=address,undefined", str(unit), "-o", str(binary)], check=True)
+        subprocess.run([str(binary)], check=True)
 print("Controller profile, inheritance, conflict, malformed-input and frontend-only hook tests passed")
