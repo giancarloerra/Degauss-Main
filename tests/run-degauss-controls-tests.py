@@ -220,6 +220,35 @@ with tempfile.TemporaryDirectory(prefix="degauss-control-handover-") as temporar
                     "-fsanitize=address,undefined", str(unit), "-o", str(binary)], check=True)
     subprocess.run([str(binary)], check=True)
 
+snapshot_start = source.index("static void degauss_controller_snapshot(unsigned token)\n{")
+snapshot_function = source[snapshot_start:source.index("\n}\n", snapshot_start) + 3]
+snapshot_harness = r'''
+#include "support/degauss/degauss_controls.h"
+#include <cassert>
+#define NUMDEV 1
+static int degauss_controller_active_device = -1;
+static uint16_t degauss_controller_generation = 1;
+static bool degauss_controller_inventory_changed = true;
+static bool degauss_controller_is_pad(int) { return false; }
+static void degauss_controller_encode(std::vector<uint8_t> &, int) {}
+static void degauss_controller_reply(unsigned, const std::vector<uint8_t> &) {}
+'''
+snapshot_cases = r'''
+int main() {
+    degauss_controller_snapshot(123456789);
+    assert(degauss_controller_inventory_changed); // a list reply does not refresh the active report
+    degauss_controller_snapshot(0);
+    assert(!degauss_controller_inventory_changed);
+}
+'''
+with tempfile.TemporaryDirectory(prefix="degauss-control-snapshot-") as temporary:
+    unit = Path(temporary) / "snapshot.cpp"
+    unit.write_text(snapshot_harness + snapshot_function + snapshot_cases)
+    binary = Path(temporary) / "snapshot"
+    subprocess.run(["c++", "-std=c++14", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT),
+                    "-fsanitize=address,undefined", str(unit), "-o", str(binary)], check=True)
+    subprocess.run([str(binary)], check=True)
+
 if sys.platform.startswith("linux"):
     start = source.index("static bool degauss_controller_is_pad(")
     inventory = source[start:source.index("\n}\n", start) + 3]

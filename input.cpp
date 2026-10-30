@@ -2225,7 +2225,7 @@ static void degauss_controller_snapshot(unsigned token)
 	degauss_controls::word(out, devices.size());
 	for (int dev : devices) degauss_controller_encode(out, dev);
 	degauss_controller_reply(token, out);
-	degauss_controller_inventory_changed = false;
+	if (!token) degauss_controller_inventory_changed = false;
 }
 
 static void degauss_controller_active(int dev)
