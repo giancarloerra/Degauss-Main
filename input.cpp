@@ -2302,6 +2302,7 @@ static void degauss_controller_poll()
 		degauss_controller_session = active;
 		degauss_controller_cancel_capture();
 		degauss_controller_profiles.clear();
+		if (!active) for (auto key : degauss_controller_keys) uinp_send_key(key, 0);
 		degauss_controller_active_device = -1;
 		degauss_controller_active_identity.clear();
 		if (active) degauss_controller_snapshot(0);

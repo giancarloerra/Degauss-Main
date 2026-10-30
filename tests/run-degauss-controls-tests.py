@@ -174,6 +174,52 @@ with tempfile.TemporaryDirectory(prefix="degauss-control-capture-") as temporary
                     "-fsanitize=address,undefined", str(unit), "-o", str(binary)], check=True)
     subprocess.run([str(binary)], check=True)
 
+poll_start = source.index("static void degauss_controller_poll()")
+poll_function = source[poll_start:source.index("\n}\n", poll_start) + 3]
+poll_harness = r'''
+#include "support/degauss/degauss_controls.h"
+#include <cassert>
+#include <unistd.h>
+static bool active = true;
+static bool menu_degauss_controls_active() { return active; }
+static bool user_io_osd_is_visible() { return false; }
+static bool degauss_controller_session = false, degauss_controller_inventory_changed = false;
+static unsigned degauss_controller_capture = 0;
+static int degauss_controller_capture_device = -1, degauss_controller_active_device = -1;
+static unsigned degauss_controller_capture_code = 0, degauss_controller_capture_since = 0,
+    degauss_controller_capture_started = 0;
+static std::string degauss_controller_capture_identity, degauss_controller_active_identity;
+static degauss_controls::Store degauss_controller_profiles;
+static struct { int fd; } pool[1];
+static const uint16_t degauss_controller_keys[] = {1,2,3,4,5,6,7,8,9,10};
+static unsigned releases = 0;
+static void uinp_send_key(uint16_t, int value) { assert(!value); ++releases; }
+static void degauss_controller_cancel_capture() { degauss_controller_capture = 0; }
+static void degauss_controller_snapshot(unsigned) {}
+static std::string degauss_controller_identity(int) { return "pad"; }
+static void degauss_controller_active(int dev) { degauss_controller_active_device = dev; }
+static uint32_t GetTimer(unsigned) { return 100; }
+static void degauss_controller_error(unsigned, const std::string &) {}
+'''
+poll_cases = r'''
+int main() {
+    degauss_controller_poll();
+    assert(degauss_controller_session && !releases);
+    active = false;
+    degauss_controller_poll();
+    assert(!degauss_controller_session && releases == 10); // no held translated keys leak into native scripts/OSD
+    degauss_controller_poll();
+    assert(releases == 10); // idle native input is untouched
+}
+'''
+with tempfile.TemporaryDirectory(prefix="degauss-control-handover-") as temporary:
+    unit = Path(temporary) / "handover.cpp"
+    unit.write_text(poll_harness + poll_function + poll_cases)
+    binary = Path(temporary) / "handover"
+    subprocess.run(["c++", "-std=c++14", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT),
+                    "-fsanitize=address,undefined", str(unit), "-o", str(binary)], check=True)
+    subprocess.run([str(binary)], check=True)
+
 if sys.platform.startswith("linux"):
     start = source.index("static bool degauss_controller_is_pad(")
     inventory = source[start:source.index("\n}\n", start) + 3]
