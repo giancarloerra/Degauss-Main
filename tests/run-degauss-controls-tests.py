@@ -27,7 +27,9 @@ capture = source.index("degauss_controller_capture_key(dev, ev->code", callback)
 overlay = source.index("degauss_controller_custom_key(dev, ev->code", callback)
 native = source.index("if (ev->code == input[dev].mmap[SYS_BTN_X])", overlay)
 assert shortcut < capture < overlay < native
-assert "if (menu_degauss_controls_active() && !user_io_osd_is_visible())" in source[capture - 170:capture]
+dispatch_start = source.rfind("if (menu_degauss_controls_active()", callback, capture)
+dispatch_end = source.index("\n\t\t\t\t\tif (ev->value <= 1)", capture)
+dispatch = source[dispatch_start:dispatch_end]
 custom_start = source.index("static bool degauss_controller_custom_key(")
 custom = source[custom_start:source.index("\n}\n", custom_start) + 3]
 assert "!menu_degauss_controls_active() || user_io_osd_is_visible()" in custom
@@ -63,6 +65,45 @@ with tempfile.TemporaryDirectory(prefix="degauss-control-ownership-") as tempora
     unit.write_text(ownership_harness + predicate + '\n}\n' + ownership_cases)
     binary = Path(temporary) / "ownership"
     subprocess.run(["c++", "-std=c++14", "-Wall", "-Wextra", "-Werror",
+                    "-fsanitize=address,undefined", str(unit), "-o", str(binary)], check=True)
+    subprocess.run([str(binary)], check=True)
+
+# Non-controller multimedia buttons share the EV_KEY branch. They must not
+# replace the active pad, clear its labels, or enter capture/custom routing.
+dispatch_harness = r'''
+#include <cassert>
+static bool frontend = true, osd = false, eligible = true;
+static int active = 1, captures = 0, customs = 0;
+static bool menu_degauss_controls_active() { return frontend; }
+static bool user_io_osd_is_visible() { return osd; }
+static bool degauss_controller_is_pad(int) { return eligible; }
+static void degauss_controller_active(int dev) { active = dev; }
+static bool degauss_controller_capture_key(int, int, int) { ++captures; return false; }
+static bool degauss_controller_custom_key(int, int, int) { ++customs; return false; }
+static void dispatch_event(int dev) {
+    struct { int code, value; } event = {352, 1}; // KEY_OK on an ordinary multimedia device
+    auto *ev = &event;
+'''
+dispatch_cases = r'''
+}
+int main() {
+    eligible = false;
+    assert(!degauss_controller_is_pad(2));
+    dispatch_event(2);
+    assert(active == 1 && !captures && !customs);
+    eligible = true;
+    dispatch_event(2);
+    assert(active == 2 && captures == 1 && customs == 1);
+    frontend = false; dispatch_event(3);
+    frontend = true; osd = true; dispatch_event(3);
+    assert(active == 2 && captures == 1 && customs == 1);
+}
+'''
+with tempfile.TemporaryDirectory(prefix="degauss-control-dispatch-") as temporary:
+    unit = Path(temporary) / "dispatch.cpp"
+    unit.write_text(dispatch_harness + dispatch + dispatch_cases)
+    binary = Path(temporary) / "dispatch"
+    subprocess.run(["c++", "-std=c++14", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT),
                     "-fsanitize=address,undefined", str(unit), "-o", str(binary)], check=True)
     subprocess.run([str(binary)], check=True)
 

@@ -4045,7 +4045,8 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 
 				if (user_io_osd_is_visible() || video_fb_state())
 				{
-					if (menu_degauss_controls_active() && !user_io_osd_is_visible()) {
+					if (menu_degauss_controls_active() && !user_io_osd_is_visible()
+						&& degauss_controller_is_pad(dev)) {
 						degauss_controller_active(dev);
 						if (degauss_controller_capture_key(dev, ev->code, ev->value)
 							|| degauss_controller_custom_key(dev, ev->code, ev->value)) return;
