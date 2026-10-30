@@ -39,6 +39,7 @@
 #include "scaler.h"
 #include "file_io.h"
 #include "support/degauss/degauss_shortcut.h"
+#include "support/degauss/degauss_controls.h"
 #include "offload.h"
 
 #define NUMDEV 30
@@ -2032,6 +2033,339 @@ static int keyrah_trans(int key, int press)
 }
 
 static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int dev, bool menu_event = false);
+static void uinp_send_key(uint16_t key, int press);
+static void degauss_ensure_menu_mapping(int dev, int sub_dev);
+static void degauss_controller_snapshot(unsigned token);
+
+static degauss_controls::Store degauss_controller_profiles;
+static unsigned degauss_controller_capture = 0;
+static int degauss_controller_capture_device = -1;
+static uint16_t degauss_controller_capture_code = 0;
+static uint32_t degauss_controller_capture_since = 0;
+static uint32_t degauss_controller_capture_started = 0;
+static std::string degauss_controller_capture_identity;
+static int degauss_controller_active_device = -1;
+static std::string degauss_controller_active_identity;
+static bool degauss_controller_session = false;
+static bool degauss_controller_inventory_changed = true;
+static uint16_t degauss_controller_generation = 0;
+static const uint16_t degauss_controller_keys[] = {KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_ENTER,
+	KEY_ESC, KEY_TAB, KEY_SPACE, KEY_PAGEUP, KEY_PAGEDOWN};
+
+static void degauss_controller_reply(unsigned token, const std::vector<uint8_t> &bytes)
+{
+	char path[128], temporary[136];
+	if (token) snprintf(path, sizeof(path), "/tmp/degauss-controller-%u.status", token);
+	else snprintf(path, sizeof(path), "/tmp/degauss-controller-active.status");
+	snprintf(temporary, sizeof(temporary), "%s.part", path);
+	int fd = open(temporary, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+	if (fd < 0) { perror("Degauss controller reply"); return; }
+	const ssize_t size = write(fd, bytes.data(), bytes.size());
+	const int closed = close(fd);
+	if (size != static_cast<ssize_t>(bytes.size()) || closed || rename(temporary, path)) {
+		perror("Degauss controller reply install");
+		unlink(temporary);
+	}
+}
+
+static void degauss_controller_error(unsigned token, const std::string &detail)
+{
+	const std::string text = "error " + detail + "\n";
+	degauss_controller_reply(token, std::vector<uint8_t>(text.begin(), text.end()));
+}
+
+static std::string degauss_controller_identity(int dev)
+{
+	std::string id = get_unique_mapping(dev);
+	if (input[dev].mod) id += "_m";
+	return id;
+}
+
+static degauss_controls::Bindings degauss_controller_native(int dev)
+{
+	const uint32_t *map = input[dev].mmap;
+	auto result = degauss_controls::Bindings{{static_cast<uint16_t>(map[SYS_BTN_UP]), static_cast<uint16_t>(map[SYS_BTN_DOWN]),
+		static_cast<uint16_t>(map[SYS_BTN_LEFT]), static_cast<uint16_t>(map[SYS_BTN_RIGHT]),
+		static_cast<uint16_t>((map[SYS_BTN_MENU_FUNC] & 0xFFFF) ? map[SYS_BTN_MENU_FUNC] : map[SYS_BTN_A]),
+		static_cast<uint16_t>((map[SYS_BTN_MENU_FUNC] >> 16) ? (map[SYS_BTN_MENU_FUNC] >> 16) : map[SYS_BTN_B]),
+		static_cast<uint16_t>(map[SYS_BTN_X]), static_cast<uint16_t>(map[SYS_BTN_Y]),
+		static_cast<uint16_t>(map[SYS_BTN_L]), static_cast<uint16_t>(map[SYS_BTN_R])}};
+	if (input[dev].quirk != QUIRK_WHEEL) {
+		const uint16_t x = map[SYS_AXIS_X] ? KEY_EMU + static_cast<uint16_t>(map[SYS_AXIS_X]) * 2 : 0;
+		const uint16_t y = map[SYS_AXIS_Y] ? KEY_EMU + static_cast<uint16_t>(map[SYS_AXIS_Y]) * 2 : 0;
+		if (!result[degauss_controls::UP]) result[degauss_controls::UP] = y;
+		if (!result[degauss_controls::DOWN] && y) result[degauss_controls::DOWN] = y + 1;
+		if (!result[degauss_controls::LEFT]) result[degauss_controls::LEFT] = x;
+		if (!result[degauss_controls::RIGHT] && x) result[degauss_controls::RIGHT] = x + 1;
+	}
+	return result;
+}
+
+static std::string degauss_controller_label(int dev, uint16_t code)
+{
+	if (!code) return "Unassigned";
+	static const char *names[] = {"A", "B", "X", "Y", "L", "R", "Select", "Start"};
+	for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
+		if (code == input[dev].mmap[SYS_BTN_A + i]) return names[i];
+	char label[48];
+	if (code >= KEY_EMU) {
+		const unsigned axis = (code - KEY_EMU) >> 1;
+		if (axis == ABS_HAT0X || axis == ABS_HAT0Y)
+			return axis == ABS_HAT0X ? ((code & 1) ? "Dpad Right" : "Dpad Left")
+				: ((code & 1) ? "Dpad Down" : "Dpad Up");
+		snprintf(label, sizeof(label), "Axis %u %c", axis, (code & 1) ? '+' : '-');
+	} else {
+		// Unknown controls use the same Linux code shown by the tester.
+		snprintf(label, sizeof(label), "Button %u", code);
+	}
+	return label;
+}
+
+static degauss_controls::Bindings degauss_controller_effective(int dev)
+{
+	const auto native = degauss_controller_native(dev);
+	const auto *profile = degauss_controller_profiles.find(degauss_controller_identity(dev));
+	return profile ? profile->resolve(native) : native;
+}
+
+static bool degauss_controller_custom_key(int dev, uint16_t code, int value)
+{
+	if (degauss_controller_profiles.empty() || !menu_degauss_controls_active() || user_io_osd_is_visible()) return false;
+	const auto *profile = degauss_controller_profiles.find(degauss_controller_identity(dev));
+	if (!profile) return false;
+	if (value > 1) return true;
+	const auto controls = profile->resolve(degauss_controller_native(dev));
+	std::string error;
+	if (!degauss_controls::validate(controls, error)) return true;
+	for (unsigned role = 0; role < degauss_controls::ROLE_COUNT; ++role) {
+		if (controls[role] && controls[role] == code) {
+			uinp_send_key(degauss_controller_keys[role], value);
+			return true;
+		}
+	}
+	// Keep Main's native stick navigation for directions without an override.
+	for (unsigned axis = 0; axis < 2; ++axis) {
+		const uint16_t native_axis = static_cast<uint16_t>(input[dev].mmap[SYS_AXIS_X + axis]);
+		if (native_axis && code >= KEY_EMU && static_cast<uint32_t>((code - KEY_EMU) >> 1) == native_axis) {
+			const unsigned role = axis ? ((code & 1) ? degauss_controls::DOWN : degauss_controls::UP)
+				: ((code & 1) ? degauss_controls::RIGHT : degauss_controls::LEFT);
+			if (profile->bindings[role] == degauss_controls::INHERIT) uinp_send_key(degauss_controller_keys[role], value);
+			return true;
+		}
+	}
+	return true;
+}
+
+static bool degauss_controller_is_pad(int dev)
+{
+	if (pool[dev].fd < 0 || input[dev].mouse
+		|| (!JOYCON_COMBINED(dev) && input[dev].bind >= 0 && input[dev].bind != dev)) return false;
+	if (input[dev].force_joy) return true;
+	unsigned char keys[(KEY_CNT + 7) / 8] = {};
+	if (ioctl(pool[dev].fd, EVIOCGBIT(EV_KEY, sizeof(keys)), keys) < 0) return false;
+	for (unsigned code = BTN_MISC; code < KEY_CNT; ++code)
+		if (test_bit(code, keys)) return true;
+	unsigned char axes[(ABS_CNT + 7) / 8] = {};
+	if (ioctl(pool[dev].fd, EVIOCGBIT(EV_ABS, sizeof(axes)), axes) < 0) return false;
+	return test_bit(ABS_X, axes) || test_bit(ABS_Y, axes) || test_bit(ABS_HAT0X, axes);
+}
+
+static void degauss_controller_encode(std::vector<uint8_t> &out, int dev)
+{
+	degauss_ensure_menu_mapping(dev, dev);
+	degauss_controls::word(out, dev);
+	const auto *profile = degauss_controller_profiles.find(degauss_controller_identity(dev));
+	degauss_controls::word(out, (input[dev].force_joy ? 1 : 0) | (profile ? 2 : 0));
+	degauss_controls::text(out, degauss_controller_identity(dev));
+	degauss_controls::text(out, input[dev].name);
+	std::vector<std::string> paths;
+	for (int i = 0; i < NUMDEV; ++i) if (pool[i].fd >= 0 && !input[i].mouse
+		&& (i == dev || input[i].bind == dev)) paths.push_back(input[i].devname);
+	degauss_controls::word(out, paths.size());
+	for (const auto &path : paths) degauss_controls::text(out, path);
+	const auto native = degauss_controller_native(dev);
+	const auto effective = degauss_controller_effective(dev);
+	for (auto code : native) degauss_controls::word(out, code);
+	for (auto code : effective) degauss_controls::word(out, code);
+	for (auto code : native) degauss_controls::text(out, degauss_controller_label(dev, code));
+	for (auto code : effective) degauss_controls::text(out, degauss_controller_label(dev, code));
+	std::string error;
+	if (profile) degauss_controls::validate(effective, error);
+	degauss_controls::text(out, error);
+}
+
+static void degauss_controller_snapshot(unsigned token)
+{
+	auto out = degauss_controls::reply(token ? "DGCS" : "DGCR");
+	std::vector<int> devices;
+	uint16_t active = UINT16_MAX;
+	for (int dev = 0; dev < NUMDEV; ++dev) if (degauss_controller_is_pad(dev)) {
+		devices.push_back(dev);
+		if (dev == degauss_controller_active_device) active = dev;
+	}
+	if (!token) degauss_controls::word(out, active);
+	if (!token) degauss_controls::word(out, degauss_controller_generation);
+	degauss_controls::word(out, devices.size());
+	for (int dev : devices) degauss_controller_encode(out, dev);
+	degauss_controller_reply(token, out);
+	degauss_controller_inventory_changed = false;
+}
+
+static void degauss_controller_active(int dev)
+{
+	if (degauss_controller_active_device == dev || !menu_degauss_controls_active()) return;
+	degauss_controller_active_device = dev;
+	degauss_controller_active_identity = dev < 0 ? "" : degauss_controller_identity(dev);
+	degauss_controller_snapshot(0);
+}
+
+static void degauss_controller_cancel_capture()
+{
+	if (degauss_controller_capture)
+		degauss_controller_reply(degauss_controller_capture, degauss_controls::reply("DGCX"));
+	degauss_controller_capture = 0;
+	degauss_controller_capture_device = -1;
+	degauss_controller_capture_code = 0;
+	degauss_controller_capture_identity.clear();
+}
+
+static void degauss_controller_devices_changed()
+{
+	if (!degauss_controller_session) return;
+	if (degauss_controller_capture) {
+		degauss_controller_error(degauss_controller_capture, "Input devices changed; capture cancelled. Refresh Controllers before remapping.");
+		degauss_controller_capture = 0;
+	}
+	degauss_controller_cancel_capture();
+	degauss_controller_active_device = -1;
+	degauss_controller_active_identity.clear();
+	++degauss_controller_generation;
+	// Publish the new inventory before releasing keys, so the frontend clears
+	// its pending holds rather than treating removal as a short button press.
+	degauss_controller_snapshot(0);
+	for (auto key : degauss_controller_keys) uinp_send_key(key, 0);
+}
+
+static bool degauss_controller_capture_key(int dev, uint16_t code, int value)
+{
+	if (!degauss_controller_capture || dev != degauss_controller_capture_device
+		|| user_io_osd_is_visible()) return false;
+	const uint32_t first = input[dev].mmap[SYS_BTN_OSD_KTGL + 1];
+	const uint32_t second = input[dev].mmap[SYS_BTN_OSD_KTGL + 2];
+	if (code && code == first && first == second) {
+		degauss_controller_error(degauss_controller_capture, "MiSTer's Menu control is reserved");
+		degauss_controller_capture = 0;
+		return false;
+	}
+	if (value == 1 && !degauss_controller_capture_code) {
+		degauss_controller_capture_code = code;
+		degauss_controller_capture_since = GetTimer(0);
+	} else if (!value && code == degauss_controller_capture_code) {
+		if (static_cast<uint32_t>(GetTimer(0) - degauss_controller_capture_since) >= 2000)
+			degauss_controller_cancel_capture();
+		else {
+			auto out = degauss_controls::reply("DGCC");
+			degauss_controls::word(out, dev);
+			degauss_controls::word(out, code);
+			degauss_controls::text(out, degauss_controller_label(dev, code));
+			degauss_controller_reply(degauss_controller_capture, out);
+			degauss_controller_capture = 0;
+			degauss_controller_capture_code = 0;
+		}
+	}
+	return true;
+}
+
+static void degauss_controller_poll()
+{
+	const bool active = menu_degauss_controls_active();
+	if (active != degauss_controller_session) {
+		degauss_controller_session = active;
+		degauss_controller_cancel_capture();
+		degauss_controller_profiles.clear();
+		degauss_controller_active_device = -1;
+		degauss_controller_active_identity.clear();
+		if (active) degauss_controller_snapshot(0);
+		else unlink("/tmp/degauss-controller-active.status");
+	}
+	if (active && degauss_controller_active_device >= 0
+		&& (pool[degauss_controller_active_device].fd < 0
+			|| degauss_controller_identity(degauss_controller_active_device) != degauss_controller_active_identity))
+		degauss_controller_active(-1);
+	if (active && degauss_controller_inventory_changed) degauss_controller_snapshot(0);
+	if (degauss_controller_capture) {
+		if (!active || user_io_osd_is_visible()) degauss_controller_cancel_capture();
+		else if (pool[degauss_controller_capture_device].fd < 0
+			|| degauss_controller_identity(degauss_controller_capture_device) != degauss_controller_capture_identity) {
+			degauss_controller_error(degauss_controller_capture, "The selected controller disconnected");
+			degauss_controller_capture = 0;
+		} else if (degauss_controller_capture_code
+			&& static_cast<uint32_t>(GetTimer(0) - degauss_controller_capture_since) >= 2000)
+			degauss_controller_cancel_capture();
+		else if (static_cast<uint32_t>(GetTimer(0) - degauss_controller_capture_started) >= 29000) {
+			degauss_controller_error(degauss_controller_capture, "No controller control was captured before the timeout");
+			degauss_controller_capture = 0;
+		}
+	}
+}
+
+static void degauss_controller_command(const char *command)
+{
+	unsigned token = 0, instance = 0;
+	char operation[16] = {}, extra = 0;
+	if (sscanf(command, "%u %15s", &token, operation) != 2
+		|| token < 100000000 || token >= 1000000000) return;
+	if (!menu_degauss_controls_active() || user_io_osd_is_visible()) {
+		degauss_controller_error(token, "Degauss controller settings are not active");
+		return;
+	}
+	if (!strcmp(operation, "list")) degauss_controller_snapshot(token);
+	else if (!strcmp(operation, "cancel")) {
+		if (degauss_controller_capture && degauss_controller_capture != token)
+			degauss_controller_error(token, "A different controller capture is active");
+		else if (degauss_controller_capture) degauss_controller_cancel_capture();
+		else degauss_controller_reply(token, degauss_controls::reply("DGCX"));
+	} else if (!strcmp(operation, "capture")) {
+		if (sscanf(command, "%u %15s %u %c", &token, operation, &instance, &extra) != 3
+			|| instance >= NUMDEV || !degauss_controller_is_pad(instance)) {
+			degauss_controller_error(token, "The selected controller is unavailable");
+			return;
+		}
+		degauss_controller_cancel_capture();
+		degauss_controller_capture = token;
+		degauss_controller_capture_device = instance;
+		degauss_controller_capture_identity = degauss_controller_identity(instance);
+		degauss_controller_capture_started = GetTimer(0);
+		degauss_controller_reply(token, degauss_controls::reply("DGCB"));
+	} else if (!strcmp(operation, "apply")) {
+		char path[128];
+		snprintf(path, sizeof(path), "/tmp/degauss-controller-%u.data", token);
+		int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+		if (fd < 0) { degauss_controller_error(token, std::string("Reading controller profiles: ") + strerror(errno)); return; }
+		struct stat info = {};
+		if (fstat(fd, &info) || !S_ISREG(info.st_mode) || info.st_size < 8 || info.st_size > 16384) {
+			close(fd); degauss_controller_error(token, "Invalid controller profile file"); return;
+		}
+		std::vector<uint8_t> bytes(info.st_size);
+		const ssize_t size = read(fd, bytes.data(), bytes.size());
+		close(fd);
+		if (size != static_cast<ssize_t>(bytes.size())) { degauss_controller_error(token, "Incomplete controller profile read"); return; }
+		degauss_controls::Store candidate;
+		std::string error;
+		if (!candidate.read(bytes, error)) { degauss_controller_error(token, error); return; }
+		for (int dev = 0; dev < NUMDEV; ++dev) if (degauss_controller_is_pad(dev)) {
+			degauss_ensure_menu_mapping(dev, dev);
+			const auto *profile = candidate.find(degauss_controller_identity(dev));
+			if (profile && !degauss_controls::validate(profile->resolve(degauss_controller_native(dev)), error)) {
+				degauss_controller_error(token, error); return;
+			}
+		}
+		degauss_controller_profiles = candidate;
+		for (auto key : degauss_controller_keys) uinp_send_key(key, 0);
+		degauss_controller_snapshot(0);
+		degauss_controller_reply(token, degauss_controls::reply("DGCA"));
+	} else degauss_controller_error(token, "Unknown Degauss controller operation");
+}
 
 static int kbd_toggle = 0;
 
@@ -2959,79 +3293,8 @@ static void assign_player(int dev, int num, int force = 0)
 	printf("Device %s %sassigned to player %d\n", input[dev].id, force ? "forcebly " : "", input[dev].num);
 }
 
-static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int dev, bool menu_event)
+static void degauss_ensure_menu_mapping(int dev, int sub_dev)
 {
-	if (ev->type != EV_KEY && ev->type != EV_ABS && ev->type != EV_REL) return;
-	if (ev->type == EV_KEY && (!ev->code || ev->code == KEY_UNKNOWN)) return;
-
-	static uint16_t last_axis = 0;
-
-	int sub_dev = dev;
-
-	//check if device is a part of multifunctional device
-	if (!JOYCON_COMBINED(dev) && input[dev].bind >= 0) dev = input[dev].bind;
-
-	if (ev->type == EV_KEY)
-	{
-		if (input[dev].timeout > 0) input[dev].timeout = cfg.bt_auto_disconnect * 10;
-
-		//mouse
-		//if the lightgun mouse quirk is set then don't pass these button presses to the mouse system
-		//let them get handled and mapped like regular buttons
-		if (ev->code >= BTN_MOUSE && ev->code < BTN_JOYSTICK && input[dev].quirk != QUIRK_LIGHTGUN_MOUSE)
-		{
-			if (ev->value <= 1)
-			{
-				int mask = 1 << (ev->code - BTN_MOUSE);
-				if (input[dev].ds_mouse_emu && mask == 1) mask = 2;
-				mice_btn = (ev->value) ? (mice_btn | mask) : (mice_btn & ~mask);
-				mouse_btn_req();
-			}
-			return;
-		}
-	}
-
-	// Degauss accepts the complete Linux keyboard-key range before MiSTer's
-	// legacy 256-entry keyboard remap. Linux button ranges and keyboards that
-	// are deliberately configured as joysticks cannot become the shortcut.
-	const bool degauss_keyboard_event = ev->type == EV_KEY
-		&& ev->code
-		&& degauss_shortcut_logic::valid_keyboard_key(ev->code)
-		&& !(mapping && mapping_type == 2)
-		&& !input[dev].force_joy;
-	if (degauss_keyboard_event
-		&& degauss_shortcut_handle_keyboard_event(ev->code, ev->value, menu_event))
-	{
-		return;
-	}
-	if (!menu_event && ev->type == EV_KEY
-		&& degauss_shortcut_logic::valid_controller_button(ev->code)
-		&& degauss_shortcut_handle_controller_event(sub_dev, ev->code, ev->value))
-	{
-		return;
-	}
-
-	if (ev->type == EV_KEY && ev->code < 256 && !(mapping && mapping_type == 2) && !input[dev].force_joy)
-	{
-		if (!input[dev].has_kbdmap)
-		{
-			if (!FileLoadConfig(get_kbdmap_name(dev), &input[dev].kbdmap, sizeof(input[dev].kbdmap)))
-			{
-				memset(input[dev].kbdmap, 0, sizeof(input[dev].kbdmap));
-			}
-			input[dev].has_kbdmap = 1;
-		}
-
-		if (input[dev].kbdmap[ev->code]) ev->code = input[dev].kbdmap[ev->code];
-	}
-
-	static int key_mapped = 0;
-
-	int map_skip = (ev->type == EV_KEY && mapping && ((ev->code == KEY_SPACE && mapping_type == 1) || ev->code == KEY_ALTERASE) && (mapping_dev >= 0 || mapping_button<0));
-	int cancel   = (ev->type == EV_KEY && ev->code == KEY_ESC && !(mapping && mapping_type == 3 && mapping_button));
-	int enter    = (ev->type == EV_KEY && ev->code == KEY_ENTER && !(mapping && mapping_type == 3 && mapping_button));
-	int origcode = ev->code;
-
 	if (!input[dev].has_mmap)
 	{
 		if (input[dev].quirk == QUIRK_TOUCHGUN)
@@ -3099,7 +3362,85 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 			}
 		}
 		input[dev].has_mmap++;
+		degauss_controller_inventory_changed = true;
 	}
+}
+
+static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int dev, bool menu_event)
+{
+	if (ev->type != EV_KEY && ev->type != EV_ABS && ev->type != EV_REL) return;
+	if (ev->type == EV_KEY && (!ev->code || ev->code == KEY_UNKNOWN)) return;
+
+	static uint16_t last_axis = 0;
+
+	int sub_dev = dev;
+
+	//check if device is a part of multifunctional device
+	if (!JOYCON_COMBINED(dev) && input[dev].bind >= 0) dev = input[dev].bind;
+
+	if (ev->type == EV_KEY)
+	{
+		if (input[dev].timeout > 0) input[dev].timeout = cfg.bt_auto_disconnect * 10;
+
+		//mouse
+		//if the lightgun mouse quirk is set then don't pass these button presses to the mouse system
+		//let them get handled and mapped like regular buttons
+		if (ev->code >= BTN_MOUSE && ev->code < BTN_JOYSTICK && input[dev].quirk != QUIRK_LIGHTGUN_MOUSE)
+		{
+			if (ev->value <= 1)
+			{
+				int mask = 1 << (ev->code - BTN_MOUSE);
+				if (input[dev].ds_mouse_emu && mask == 1) mask = 2;
+				mice_btn = (ev->value) ? (mice_btn | mask) : (mice_btn & ~mask);
+				mouse_btn_req();
+			}
+			return;
+		}
+	}
+
+	// Degauss accepts the complete Linux keyboard-key range before MiSTer's
+	// legacy 256-entry keyboard remap. Linux button ranges and keyboards that
+	// are deliberately configured as joysticks cannot become the shortcut.
+	const bool degauss_keyboard_event = ev->type == EV_KEY
+		&& ev->code
+		&& degauss_shortcut_logic::valid_keyboard_key(ev->code)
+		&& !(mapping && mapping_type == 2)
+		&& !input[dev].force_joy;
+	if (degauss_keyboard_event
+		&& degauss_shortcut_handle_keyboard_event(ev->code, ev->value, menu_event))
+	{
+		return;
+	}
+	if (!menu_event && ev->type == EV_KEY
+		&& degauss_shortcut_logic::valid_controller_button(ev->code)
+		&& degauss_shortcut_handle_controller_event(sub_dev, ev->code, ev->value))
+	{
+		return;
+	}
+
+	if (ev->type == EV_KEY && ev->code < 256 && !(mapping && mapping_type == 2) && !input[dev].force_joy)
+	{
+		if (ev->value == 1 && !menu_event) degauss_controller_active(-1);
+		if (!input[dev].has_kbdmap)
+		{
+			if (!FileLoadConfig(get_kbdmap_name(dev), &input[dev].kbdmap, sizeof(input[dev].kbdmap)))
+			{
+				memset(input[dev].kbdmap, 0, sizeof(input[dev].kbdmap));
+			}
+			input[dev].has_kbdmap = 1;
+		}
+
+		if (input[dev].kbdmap[ev->code]) ev->code = input[dev].kbdmap[ev->code];
+	}
+
+	static int key_mapped = 0;
+
+	int map_skip = (ev->type == EV_KEY && mapping && ((ev->code == KEY_SPACE && mapping_type == 1) || ev->code == KEY_ALTERASE) && (mapping_dev >= 0 || mapping_button<0));
+	int cancel   = (ev->type == EV_KEY && ev->code == KEY_ESC && !(mapping && mapping_type == 3 && mapping_button));
+	int enter    = (ev->type == EV_KEY && ev->code == KEY_ENTER && !(mapping && mapping_type == 3 && mapping_button));
+	int origcode = ev->code;
+
+	degauss_ensure_menu_mapping(dev, sub_dev);
 
 	if (!input[dev].has_map)
 	{
@@ -3661,6 +4002,11 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 
 				if (user_io_osd_is_visible() || video_fb_state())
 				{
+					if (menu_degauss_controls_active() && !user_io_osd_is_visible()) {
+						degauss_controller_active(dev);
+						if (degauss_controller_capture_key(dev, ev->code, ev->value)
+							|| degauss_controller_custom_key(dev, ev->code, ev->value)) return;
+					}
 					if (ev->value <= 1)
 					{
 						if ((input[dev].mmap[SYS_BTN_MENU_FUNC] & 0xFFFF) ?
@@ -5619,6 +5965,7 @@ int input_test(int getchar)
 			unflag_players();
 		}
 		cur_leds |= 0x80;
+		degauss_controller_devices_changed();
 		state++;
 	}
 
@@ -6294,6 +6641,7 @@ int input_test(int getchar)
 					cmd[len] = 0;
 					printf("MiSTer_cmd: %s\n", cmd);
 					if (!strncmp(cmd, "fb_cmd", 6)) video_cmd(cmd);
+					else if (!strncmp(cmd, "degauss_controller ", 19)) degauss_controller_command(cmd + 19);
 					else if (!strcmp(cmd, "fb_mask off")) video_set_degauss_display_mask(nullptr);
 					else if (!strncmp(cmd, "fb_mask ", 8)) video_set_degauss_display_mask(cmd + 8);
 					else if (!strncmp(cmd, "fb_degauss ", 11))
@@ -6507,6 +6855,7 @@ int input_poll(int getchar)
 	#ifdef PROFILING
 		PROFILE_FUNCTION();
 	#endif
+	if (!getchar) degauss_controller_poll();
 
 	static bool autofire_cfg_parsed = false;
  	if (!autofire_cfg_parsed) autofire_cfg_parsed = parse_autofire_cfg();

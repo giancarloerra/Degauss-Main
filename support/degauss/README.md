@@ -20,6 +20,17 @@ read its shortcut configuration.
 - Exiting the frontend opens the native core chooser at the root when the
   private Degauss Menu core is active. Ordinary core and MRA locations are unchanged.
 
+## Frontend controller controls
+
+While the Degauss frontend is active, it can inspect connected controllers,
+capture Main-processed button and axis-direction codes, and apply optional
+frontend-only profiles through `degauss_controller` commands. Responses are
+versioned status records in `/tmp`; the frontend owns persistence in its
+`settings.toml`. Main's native menu and game mappings are never overwritten.
+Profiles stop applying when the native OSD, a script or a game owns input.
+The active-controller report lets the frontend display the effective bindings
+and avoid reading keyboard-style controller events a second time.
+
 ## Optional return shortcut
 
 The System menu's **Frontend shortcut** row, directly below **Frontend**, opens
