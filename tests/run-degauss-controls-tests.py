@@ -37,6 +37,73 @@ assert "uinp_send_key" in custom and ".mmap[" not in custom
 negative_start = source.index("static bool degauss_controller_negative_axis(")
 negative = source[negative_start:source.index("\n}\n", negative_start) + 3]
 assert "degauss_controller_negative_axis(dev, ev.code)" in source
+assert "degauss_controller_prepare_capture_axes(instance, error)" in source
+axes_start = source.index("static bool degauss_controller_prepare_capture_axes(")
+capture_axes = source[axes_start:source.index("\n}\n", axes_start) + 3]
+axes_harness = r'''
+#include <array>
+#include <cassert>
+#include <cerrno>
+#include <cstdint>
+#include <cstring>
+#include <string>
+#include <linux/input.h>
+#define NUMDEV 3
+static std::array<bool, ABS_CNT> degauss_controller_capture_negative_axes{};
+static struct { int fd; } pool[NUMDEV] = {{0}, {1}, {2}};
+static struct { bool mouse; int bind; } input[NUMDEV] = {{false,-1}, {false,0}, {false,-1}};
+static struct { int dpad_threshold; } cfg = {50};
+static bool moved_to_edge = false;
+static bool failed_read = false;
+static bool test_bit(unsigned axis, const unsigned char *bits) { return bits[axis / 8] & (1u << (axis % 8)); }
+static int capture_ioctl(int fd, unsigned long request, void *output) {
+    assert(fd != 2); // another controller's neutral positions cannot affect capture
+    if (failed_read) { errno = ENODEV; return -1; }
+    if (request == EVIOCGBIT(EV_ABS, (ABS_CNT + 7) / 8)) {
+        auto *bits = static_cast<unsigned char *>(output);
+        if (!fd) for (unsigned axis : {0u,1u,2u,3u,5u,16u}) bits[axis/8] |= 1u << (axis%8);
+        else bits[4/8] |= 1u << (4%8);
+        return 0;
+    }
+    auto *info = static_cast<input_absinfo *>(output);
+    if (request == EVIOCGABS(0)) *info = {moved_to_edge ? 0 : 128,0,255,0,0,0};
+    else if (request == EVIOCGABS(1)) *info = {0,-32768,32767,0,0,0};
+    else if (request == EVIOCGABS(2)) *info = {0,0,255,0,0,0};
+    else if (request == EVIOCGABS(3)) *info = {0,0,0,0,0,0};
+    else if (request == EVIOCGABS(4)) *info = {0,-100,100,0,0,0};
+    else if (request == EVIOCGABS(5)) *info = {255,0,255,0,0,0};
+    else if (request == EVIOCGABS(16)) *info = {0,-1,1,0,0,0};
+    else return -1;
+    return 0;
+}
+#define ioctl capture_ioctl
+'''
+axes_cases = r'''
+int main() {
+    std::string error;
+    assert(degauss_controller_prepare_capture_axes(0, error));
+    assert(degauss_controller_capture_negative_axes[0]); // unsigned centered stick, no native axis mapping
+    assert(degauss_controller_capture_negative_axes[1]); // signed centered stick
+    assert(degauss_controller_capture_negative_axes[4]); // bound node belongs to the same controller
+    assert(degauss_controller_capture_negative_axes[16]); // centered hat remains two-sided
+    assert(!degauss_controller_capture_negative_axes[2]); // zero-rest trigger cannot become a negative press
+    assert(!degauss_controller_capture_negative_axes[5]); // maximum-rest trigger also remains one-sided
+    assert(!degauss_controller_capture_negative_axes[3]); // invalid range is not a centered axis
+    moved_to_edge = true;
+    assert(degauss_controller_prepare_capture_axes(0, error));
+    assert(!degauss_controller_capture_negative_axes[0]); // every capture observes fresh resting state
+    failed_read = true;
+    assert(!degauss_controller_prepare_capture_axes(0, error));
+    assert(error == std::string("Reading controller axis capabilities: ") + strerror(ENODEV));
+}
+'''
+with tempfile.TemporaryDirectory(prefix="degauss-control-axis-capture-") as temporary:
+    unit = Path(temporary) / "axes.cpp"
+    unit.write_text(axes_harness + capture_axes + axes_cases)
+    binary = Path(temporary) / "axes"
+    subprocess.run(["c++", "-std=c++14", "-Wall", "-Wextra", "-Werror",
+                    "-fsanitize=address,undefined", str(unit), "-o", str(binary)], check=True)
+    subprocess.run([str(binary)], check=True)
 menu = (ROOT / "menu.cpp").read_text()
 predicate_start = menu.index("bool menu_degauss_controls_active()")
 predicate = menu[predicate_start:menu.index("\n}", predicate_start)]
@@ -115,6 +182,9 @@ harness = r'''
 #include <utility>
 static degauss_controls::Store degauss_controller_profiles;
 static bool frontend = true, osd = false;
+static unsigned degauss_controller_capture = 0;
+static int degauss_controller_capture_device = -1;
+static std::array<bool, 64> degauss_controller_capture_negative_axes{};
 static bool menu_degauss_controls_active() { return frontend; }
 static bool user_io_osd_is_visible() { return osd; }
 static std::string degauss_controller_identity(int dev) { return dev ? "other" : "pad"; }
@@ -130,6 +200,16 @@ static void uinp_send_key(uint16_t key, int press) { events.push_back({key, pres
 '''
 checks = r'''
 int main() {
+    degauss_controller_capture = 123456789;
+    degauss_controller_capture_device = 0;
+    degauss_controller_capture_negative_axes[0] = true;
+    assert(degauss_controller_negative_axis(0, 0)); // centered axis can first be captured leftward without a native mapping
+    assert(!degauss_controller_negative_axis(1, 0)); // no policy change for another controller
+    assert(!degauss_controller_negative_axis(0, 2)); // resting unipolar trigger stays one-sided
+    frontend = false; assert(!degauss_controller_negative_axis(0, 0));
+    frontend = true; osd = true; assert(!degauss_controller_negative_axis(0, 0));
+    osd = false; degauss_controller_capture = 0;
+    assert(!degauss_controller_negative_axis(0, 0)); // no lasting native-axis policy change after capture
     assert(!degauss_controller_custom_key(0, 10, 1));
     auto data = degauss_controls::reply("DGCP");
     degauss_controls::word(data, 1);

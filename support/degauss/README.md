@@ -31,6 +31,8 @@ Custom profiles contain complete saved controls and labels, including copied
 D-pad, mouse-navigation and stick alternatives. They are validated before activation and do not merge
 later native mapping changes. Native mode continues to follow MiSTer's mapping.
 Profiles stop applying when the native OSD, a script or a game owns input.
+Capture observes resting axis positions so centered sticks can use either
+direction without native calibration, while resting triggers stay one-sided.
 The active-controller report lets the frontend display the effective bindings
 and avoid reading keyboard-style controller events a second time.
 

@@ -2040,6 +2040,7 @@ static degauss_controls::Store degauss_controller_profiles;
 static unsigned degauss_controller_capture = 0;
 static int degauss_controller_capture_device = -1;
 static uint16_t degauss_controller_capture_code = 0;
+static std::array<bool, ABS_CNT> degauss_controller_capture_negative_axes{};
 static uint32_t degauss_controller_capture_since = 0;
 static uint32_t degauss_controller_capture_started = 0;
 static std::string degauss_controller_capture_identity;
@@ -2165,8 +2166,41 @@ static degauss_controls::Bindings degauss_controller_effective(int dev)
 static bool degauss_controller_negative_axis(int dev, unsigned axis)
 {
 	if (!menu_degauss_controls_active() || user_io_osd_is_visible()) return false;
+	if (degauss_controller_capture && dev == degauss_controller_capture_device
+		&& axis < degauss_controller_capture_negative_axes.size()
+		&& degauss_controller_capture_negative_axes[axis]) return true;
 	const auto *profile = degauss_controller_profiles.find(degauss_controller_identity(dev));
 	return profile && profile->contains(KEY_EMU + axis * 2);
+}
+
+static bool degauss_controller_prepare_capture_axes(int dev, std::string &error)
+{
+	degauss_controller_capture_negative_axes.fill(false);
+	for (int node = 0; node < NUMDEV; ++node) if (pool[node].fd >= 0 && !input[node].mouse
+		&& (node == dev || input[node].bind == dev)) {
+		unsigned char axes[(ABS_CNT + 7) / 8] = {};
+		if (ioctl(pool[node].fd, EVIOCGBIT(EV_ABS, sizeof(axes)), axes) < 0) {
+			error = std::string("Reading controller axis capabilities: ") + strerror(errno);
+			return false;
+		}
+		for (unsigned axis = 0; axis < ABS_CNT; ++axis) if (test_bit(axis, axes)) {
+			input_absinfo info{};
+			if (ioctl(pool[node].fd, EVIOCGABS(axis), &info) < 0) {
+				error = std::string("Reading controller axis position: ") + strerror(errno);
+				return false;
+			}
+			if (info.maximum <= info.minimum) continue;
+			const int64_t range = static_cast<int64_t>(info.maximum) - info.minimum + 1;
+			const int64_t center = info.minimum + range / 2;
+			const int64_t threshold = range * cfg.dpad_threshold / 200;
+			// Observe the resting position before capture: an unmapped centered
+			// stick needs both edges, while a resting trigger stays one-sided.
+			if (info.value > info.minimum && info.value < info.maximum
+				&& info.value >= center - threshold && info.value <= center + threshold)
+				degauss_controller_capture_negative_axes[axis] = true;
+		}
+	}
+	return true;
 }
 
 static bool degauss_controller_custom_key(int dev, uint16_t code, int value)
@@ -2277,6 +2311,7 @@ static void degauss_controller_cancel_capture()
 	degauss_controller_capture = 0;
 	degauss_controller_capture_device = -1;
 	degauss_controller_capture_code = 0;
+	degauss_controller_capture_negative_axes.fill(false);
 	degauss_controller_capture_identity.clear();
 }
 
@@ -2390,6 +2425,11 @@ static void degauss_controller_command(const char *command)
 			return;
 		}
 		degauss_controller_cancel_capture();
+		std::string error;
+		if (!degauss_controller_prepare_capture_axes(instance, error)) {
+			degauss_controller_error(token, error);
+			return;
+		}
 		degauss_controller_capture = token;
 		degauss_controller_capture_device = instance;
 		degauss_controller_capture_identity = degauss_controller_identity(instance);
