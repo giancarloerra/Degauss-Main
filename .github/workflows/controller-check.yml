@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - run: python3 tests/run-degauss-controls-tests.py
       - run: bash tests/run-degauss-shortcut-tests.sh
       - run: python3 tests/degauss_script_handover_test.py
@@ -30,6 +32,8 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends git ca-certificates gcc-10-arm-linux-gnueabihf g++-10-arm-linux-gnueabihf
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - name: Check the actual ARM input and menu translation units
         run: |
           arm-linux-gnueabihf-g++-10 -std=gnu++14 -mcpu=cortex-a9 -mfpu=neon -mfloat-abi=hard \
