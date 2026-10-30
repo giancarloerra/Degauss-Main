@@ -925,6 +925,12 @@ static void vga_nag(bool show_warning = true)
 
 // Acknowledge framebuffer readiness on frontend startup. Older frontend
 // versions also use this command for their in-session script handover.
+bool menu_degauss_controls_active()
+{
+	return degauss_running && menustate == MENU_SCRIPTS_FB2 && is_menu()
+		&& video_fb_state();
+}
+
 bool menu_degauss_terminal_mode(bool frontend, char *error, size_t error_size)
 {
 	if (!degauss_running || menustate != MENU_SCRIPTS_FB2 || !is_menu()
