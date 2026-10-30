@@ -52,7 +52,6 @@ axes_harness = r'''
 static std::array<bool, ABS_CNT> degauss_controller_capture_negative_axes{};
 static struct { int fd; } pool[NUMDEV] = {{0}, {1}, {2}};
 static struct { bool mouse; int bind; } input[NUMDEV] = {{false,-1}, {false,0}, {false,-1}};
-static struct { int dpad_threshold; } cfg = {50};
 static bool moved_to_edge = false;
 static bool failed_read = false;
 static bool test_bit(unsigned axis, const unsigned char *bits) { return bits[axis / 8] & (1u << (axis % 8)); }

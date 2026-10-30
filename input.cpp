@@ -2192,7 +2192,7 @@ static bool degauss_controller_prepare_capture_axes(int dev, std::string &error)
 			if (info.maximum <= info.minimum) continue;
 			const int64_t range = static_cast<int64_t>(info.maximum) - info.minimum + 1;
 			const int64_t center = info.minimum + range / 2;
-			const int64_t threshold = range * cfg.dpad_threshold / 200;
+			const int64_t threshold = range / 4;
 			// Observe the resting position before capture: an unmapped centered
 			// stick needs both edges, while a resting trigger stays one-sided.
 			if (info.value > info.minimum && info.value < info.maximum
