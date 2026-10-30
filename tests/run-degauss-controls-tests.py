@@ -465,11 +465,12 @@ if sys.platform.startswith("linux"):
 #include "support/degauss/degauss_controls.h"
 #define NUMDEV 4
 #define KEY_EMU (KEY_MAX + 1)
-#define JOYCON_COMBINED(dev) 0
+#define JOYCON_COMBINED(dev) input[dev].combined
+#define JOYCON_RIGHT(dev) input[dev].right
 #define test_bit(bit, array) (array[(bit) / 8] & (1 << ((bit) % 8)))
 static constexpr int QUIRK_LIGHTGUN_MOUSE = 1;
 static struct { int fd; } pool[NUMDEV];
-static struct { bool mouse, force_joy, has_mmap; int bind, quirk; uint32_t mmap[10]; } input[NUMDEV] = {};
+static struct { bool mouse, force_joy, has_mmap, combined, right; int bind, quirk; uint32_t mmap[10]; } input[NUMDEV] = {};
 static degauss_controls::Bindings degauss_controller_native(int dev) {
     degauss_controls::Bindings result{}; result[0] = input[dev].mmap[0]; return result;
 }
@@ -501,6 +502,14 @@ int main() {
     assert(degauss_controller_is_pad(2)); // a nonstandard control explicitly mapped by MiSTer
     input[2].mmap[0] = KEY_EMU + ABS_VOLUME * 2;
     assert(degauss_controller_is_pad(2)); // an axis explicitly configured for native menu navigation
+    // Main binds paired Joy-Cons reciprocally and routes both halves to the left.
+    input[0].bind = 1; input[1].bind = 0;
+    input[0].combined = input[1].combined = true; input[1].right = true;
+    assert(degauss_controller_is_pad(0));
+    assert(!degauss_controller_is_pad(1)); // the redirected right half cannot be captured independently
+    input[1].combined = false; input[1].bind = 1;
+    assert(degauss_controller_is_pad(1)); // an unpaired right Joy-Con remains selectable
+    input[0].combined = false; input[0].bind = 0; input[1].bind = 0;
     pool[1].fd = -1;
     assert(!degauss_controller_is_pad(0));
 }

@@ -2221,6 +2221,7 @@ static bool degauss_controller_custom_key(int dev, uint16_t code, int value)
 
 static bool degauss_controller_is_pad(int dev)
 {
+	if (JOYCON_COMBINED(dev) && JOYCON_RIGHT(dev)) return false;
 	if (pool[dev].fd < 0 || input[dev].mouse
 		|| (!JOYCON_COMBINED(dev) && input[dev].bind >= 0 && input[dev].bind != dev)) return false;
 	for (int node = 0; node < NUMDEV; ++node) if (pool[node].fd >= 0 && !input[node].mouse
