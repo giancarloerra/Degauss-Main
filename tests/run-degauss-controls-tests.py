@@ -113,6 +113,42 @@ with tempfile.TemporaryDirectory(prefix="degauss-control-routing-") as temporary
     ], check=True)
     subprocess.run([str(binary)], check=True)
 
+capture_start = source.index("static bool degauss_controller_capture_key(")
+capture_function = source[capture_start:source.index("\n}\n", capture_start) + 3]
+capture_harness = r'''
+#include "support/degauss/degauss_controls.h"
+#include <cassert>
+static unsigned degauss_controller_capture = 123;
+static int degauss_controller_capture_device = 0;
+static uint16_t degauss_controller_capture_code = 0;
+static uint32_t degauss_controller_capture_since = 0;
+static constexpr unsigned SYS_BTN_OSD_KTGL = 0;
+static struct { uint32_t mmap[3]; } input[1] = {};
+static bool user_io_osd_is_visible() { return false; }
+static uint32_t GetTimer(unsigned) { return 100; }
+static void degauss_controller_error(unsigned, const std::string &) {}
+static void degauss_controller_cancel_capture() { degauss_controller_capture = 0; }
+static void degauss_controller_reply(unsigned, const std::vector<uint8_t> &) {}
+static std::string degauss_controller_label(int, uint16_t) { return "A"; }
+'''
+capture_cases = r'''
+int main() {
+    assert(!degauss_controller_capture_key(0, 300, 0)); // release of the Select that opened capture
+    assert(degauss_controller_capture_key(0, 301, 1));
+    assert(degauss_controller_capture_code == 301);
+    assert(!degauss_controller_capture_key(0, 302, 0)); // other previously held controls also release
+    assert(degauss_controller_capture_key(0, 301, 0));
+    assert(!degauss_controller_capture && !degauss_controller_capture_code);
+}
+'''
+with tempfile.TemporaryDirectory(prefix="degauss-control-capture-") as temporary:
+    unit = Path(temporary) / "capture.cpp"
+    unit.write_text(capture_harness + capture_function + capture_cases)
+    binary = Path(temporary) / "capture"
+    subprocess.run(["c++", "-std=c++14", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT),
+                    "-fsanitize=address,undefined", str(unit), "-o", str(binary)], check=True)
+    subprocess.run([str(binary)], check=True)
+
 if sys.platform.startswith("linux"):
     start = source.index("static bool degauss_controller_is_pad(")
     inventory = source[start:source.index("\n}\n", start) + 3]

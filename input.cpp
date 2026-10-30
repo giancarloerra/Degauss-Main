@@ -2267,6 +2267,8 @@ static bool degauss_controller_capture_key(int dev, uint16_t code, int value)
 {
 	if (!degauss_controller_capture || dev != degauss_controller_capture_device
 		|| user_io_osd_is_visible()) return false;
+	// A control held before capture opened still needs its normal key release.
+	if (!value && code != degauss_controller_capture_code) return false;
 	const uint32_t first = input[dev].mmap[SYS_BTN_OSD_KTGL + 1];
 	const uint32_t second = input[dev].mmap[SYS_BTN_OSD_KTGL + 2];
 	if (code && code == first && first == second) {
