@@ -2040,7 +2040,7 @@ static degauss_controls::Store degauss_controller_profiles;
 static unsigned degauss_controller_capture = 0;
 static int degauss_controller_capture_device = -1;
 static uint16_t degauss_controller_capture_code = 0;
-static std::array<bool, ABS_CNT> degauss_controller_capture_negative_axes{};
+static std::array<std::array<bool, ABS_CNT>, NUMDEV> degauss_controller_capture_negative_axes{};
 static uint32_t degauss_controller_capture_since = 0;
 static uint32_t degauss_controller_capture_started = 0;
 static std::string degauss_controller_capture_identity;
@@ -2163,19 +2163,20 @@ static degauss_controls::Bindings degauss_controller_effective(int dev)
 	return profile ? profile->primary() : native;
 }
 
-static bool degauss_controller_negative_axis(int dev, unsigned axis)
+static bool degauss_controller_negative_axis(int dev, unsigned axis, int source_dev)
 {
 	if (!menu_degauss_controls_active() || user_io_osd_is_visible()) return false;
 	if (degauss_controller_capture && dev == degauss_controller_capture_device
-		&& axis < degauss_controller_capture_negative_axes.size()
-		&& degauss_controller_capture_negative_axes[axis]) return true;
+		&& source_dev >= 0 && static_cast<unsigned>(source_dev) < degauss_controller_capture_negative_axes.size()
+		&& axis < degauss_controller_capture_negative_axes[source_dev].size())
+		return degauss_controller_capture_negative_axes[source_dev][axis];
 	const auto *profile = degauss_controller_profiles.find(degauss_controller_identity(dev));
 	return profile && profile->contains(KEY_EMU + axis * 2);
 }
 
 static bool degauss_controller_prepare_capture_axes(int dev, std::string &error)
 {
-	degauss_controller_capture_negative_axes.fill(false);
+	degauss_controller_capture_negative_axes = {};
 	for (int node = 0; node < NUMDEV; ++node) if (pool[node].fd >= 0 && !input[node].mouse
 		&& (node == dev || input[node].bind == dev)) {
 		unsigned char axes[(ABS_CNT + 7) / 8] = {};
@@ -2197,7 +2198,7 @@ static bool degauss_controller_prepare_capture_axes(int dev, std::string &error)
 			// stick needs both edges, while a resting trigger stays one-sided.
 			if (info.value > info.minimum && info.value < info.maximum
 				&& info.value >= center - threshold && info.value <= center + threshold)
-				degauss_controller_capture_negative_axes[axis] = true;
+				degauss_controller_capture_negative_axes[node][axis] = true;
 		}
 	}
 	return true;
@@ -2311,7 +2312,7 @@ static void degauss_controller_cancel_capture()
 	degauss_controller_capture = 0;
 	degauss_controller_capture_device = -1;
 	degauss_controller_capture_code = 0;
-	degauss_controller_capture_negative_axes.fill(false);
+	degauss_controller_capture_negative_axes = {};
 	degauss_controller_capture_identity.clear();
 }
 
@@ -6566,6 +6567,7 @@ int input_test(int getchar)
 									}
 								}
 
+								const int degauss_source_dev = i;
 								// redirect further actions to left joycon in combined mode
 								if (JOYCON_COMBINED(i))
 								{
@@ -6594,7 +6596,7 @@ int input_test(int getchar)
 
 										int only_max = 1;
 										for (int n = 0; n < 4; n++) if (input[dev].mmap[SYS_AXIS1_X + n] && ((input[dev].mmap[SYS_AXIS1_X + n] & 0xFFFF) == ev.code)) only_max = 0;
-										if (degauss_controller_negative_axis(dev, ev.code)) only_max = 0;
+										if (degauss_controller_negative_axis(dev, ev.code, degauss_source_dev)) only_max = 0;
 
 										if (ev.value < center - treshold && !only_max) axis_edge = 1;
 										if (ev.value > center + treshold) axis_edge = 2;

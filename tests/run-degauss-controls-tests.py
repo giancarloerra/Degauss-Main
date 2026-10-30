@@ -36,7 +36,8 @@ assert "!menu_degauss_controls_active() || user_io_osd_is_visible()" in custom
 assert "uinp_send_key" in custom and ".mmap[" not in custom
 negative_start = source.index("static bool degauss_controller_negative_axis(")
 negative = source[negative_start:source.index("\n}\n", negative_start) + 3]
-assert "degauss_controller_negative_axis(dev, ev.code)" in source
+assert "degauss_controller_negative_axis(dev, ev.code, degauss_source_dev)" in source
+assert source.index("const int degauss_source_dev = i;") < source.index("// redirect further actions to left joycon in combined mode")
 assert "degauss_controller_prepare_capture_axes(instance, error)" in source
 axes_start = source.index("static bool degauss_controller_prepare_capture_axes(")
 capture_axes = source[axes_start:source.index("\n}\n", axes_start) + 3]
@@ -49,7 +50,7 @@ axes_harness = r'''
 #include <string>
 #include <linux/input.h>
 #define NUMDEV 3
-static std::array<bool, ABS_CNT> degauss_controller_capture_negative_axes{};
+static std::array<std::array<bool, ABS_CNT>, NUMDEV> degauss_controller_capture_negative_axes{};
 static struct { int fd; } pool[NUMDEV] = {{0}, {1}, {2}};
 static struct { bool mouse; int bind; } input[NUMDEV] = {{false,-1}, {false,0}, {false,-1}};
 static bool moved_to_edge = false;
@@ -61,11 +62,11 @@ static int capture_ioctl(int fd, unsigned long request, void *output) {
     if (request == EVIOCGBIT(EV_ABS, (ABS_CNT + 7) / 8)) {
         auto *bits = static_cast<unsigned char *>(output);
         if (!fd) for (unsigned axis : {0u,1u,2u,3u,5u,16u}) bits[axis/8] |= 1u << (axis%8);
-        else bits[4/8] |= 1u << (4%8);
+        else { bits[0] |= 1u; bits[4/8] |= 1u << (4%8); }
         return 0;
     }
     auto *info = static_cast<input_absinfo *>(output);
-    if (request == EVIOCGABS(0)) *info = {moved_to_edge ? 0 : 128,0,255,0,0,0};
+    if (request == EVIOCGABS(0)) *info = {fd || moved_to_edge ? 0 : 128,0,255,0,0,0};
     else if (request == EVIOCGABS(1)) *info = {0,-32768,32767,0,0,0};
     else if (request == EVIOCGABS(2)) *info = {0,0,255,0,0,0};
     else if (request == EVIOCGABS(3)) *info = {0,0,0,0,0,0};
@@ -81,16 +82,17 @@ axes_cases = r'''
 int main() {
     std::string error;
     assert(degauss_controller_prepare_capture_axes(0, error));
-    assert(degauss_controller_capture_negative_axes[0]); // unsigned centered stick, no native axis mapping
-    assert(degauss_controller_capture_negative_axes[1]); // signed centered stick
-    assert(degauss_controller_capture_negative_axes[4]); // bound node belongs to the same controller
-    assert(degauss_controller_capture_negative_axes[16]); // centered hat remains two-sided
-    assert(!degauss_controller_capture_negative_axes[2]); // zero-rest trigger cannot become a negative press
-    assert(!degauss_controller_capture_negative_axes[5]); // maximum-rest trigger also remains one-sided
-    assert(!degauss_controller_capture_negative_axes[3]); // invalid range is not a centered axis
+    assert(degauss_controller_capture_negative_axes[0][0]); // unsigned centered stick, no native axis mapping
+    assert(degauss_controller_capture_negative_axes[0][1]); // signed centered stick
+    assert(degauss_controller_capture_negative_axes[1][4]); // bound node belongs to the same controller
+    assert(!degauss_controller_capture_negative_axes[1][0]); // same ABS code on a bound trigger cannot inherit the stick's center
+    assert(degauss_controller_capture_negative_axes[0][16]); // centered hat remains two-sided
+    assert(!degauss_controller_capture_negative_axes[0][2]); // zero-rest trigger cannot become a negative press
+    assert(!degauss_controller_capture_negative_axes[0][5]); // maximum-rest trigger also remains one-sided
+    assert(!degauss_controller_capture_negative_axes[0][3]); // invalid range is not a centered axis
     moved_to_edge = true;
     assert(degauss_controller_prepare_capture_axes(0, error));
-    assert(!degauss_controller_capture_negative_axes[0]); // every capture observes fresh resting state
+    assert(!degauss_controller_capture_negative_axes[0][0]); // every capture observes fresh resting state
     failed_read = true;
     assert(!degauss_controller_prepare_capture_axes(0, error));
     assert(error == std::string("Reading controller axis capabilities: ") + strerror(ENODEV));
@@ -183,7 +185,7 @@ static degauss_controls::Store degauss_controller_profiles;
 static bool frontend = true, osd = false;
 static unsigned degauss_controller_capture = 0;
 static int degauss_controller_capture_device = -1;
-static std::array<bool, 64> degauss_controller_capture_negative_axes{};
+static std::array<std::array<bool, 64>, 2> degauss_controller_capture_negative_axes{};
 static bool menu_degauss_controls_active() { return frontend; }
 static bool user_io_osd_is_visible() { return osd; }
 static std::string degauss_controller_identity(int dev) { return dev ? "other" : "pad"; }
@@ -201,14 +203,15 @@ checks = r'''
 int main() {
     degauss_controller_capture = 123456789;
     degauss_controller_capture_device = 0;
-    degauss_controller_capture_negative_axes[0] = true;
-    assert(degauss_controller_negative_axis(0, 0)); // centered axis can first be captured leftward without a native mapping
-    assert(!degauss_controller_negative_axis(1, 0)); // no policy change for another controller
-    assert(!degauss_controller_negative_axis(0, 2)); // resting unipolar trigger stays one-sided
-    frontend = false; assert(!degauss_controller_negative_axis(0, 0));
-    frontend = true; osd = true; assert(!degauss_controller_negative_axis(0, 0));
+    degauss_controller_capture_negative_axes[0][0] = true;
+    assert(degauss_controller_negative_axis(0, 0, 0)); // centered axis can first be captured leftward without a native mapping
+    assert(!degauss_controller_negative_axis(0, 0, 1)); // a bound trigger using the same ABS code stays one-sided
+    assert(!degauss_controller_negative_axis(1, 0, 1)); // no policy change for another controller
+    assert(!degauss_controller_negative_axis(0, 2, 0)); // resting unipolar trigger stays one-sided
+    frontend = false; assert(!degauss_controller_negative_axis(0, 0, 0));
+    frontend = true; osd = true; assert(!degauss_controller_negative_axis(0, 0, 0));
     osd = false; degauss_controller_capture = 0;
-    assert(!degauss_controller_negative_axis(0, 0)); // no lasting native-axis policy change after capture
+    assert(!degauss_controller_negative_axis(0, 0, 0)); // no lasting native-axis policy change after capture
     assert(!degauss_controller_custom_key(0, 10, 1));
     auto data = degauss_controls::reply("DGCP");
     degauss_controls::word(data, 1);
@@ -226,13 +229,16 @@ int main() {
     }
     std::string error;
     assert(degauss_controller_profiles.read(data, error));
+    degauss_controller_capture = 123456789;
+    assert(!degauss_controller_negative_axis(0, 3, 1)); // capture uses this source's rest state, not a saved stick on another bound node
+    degauss_controller_capture = 0;
     assert(!degauss_controller_custom_key(1, 300, 1));
     frontend = false;
     assert(!degauss_controller_custom_key(0, 300, 1));
-    assert(!degauss_controller_negative_axis(0, 3));
+    assert(!degauss_controller_negative_axis(0, 3, 0));
     frontend = true; osd = true;
     assert(!degauss_controller_custom_key(0, 300, 1));
-    assert(!degauss_controller_negative_axis(0, 3));
+    assert(!degauss_controller_negative_axis(0, 3, 0));
     osd = false;
     assert(events.empty());
     for (unsigned role = 0; role < 10; ++role) {
@@ -247,8 +253,8 @@ int main() {
     assert(degauss_controller_custom_key(0, 300, 2));
     assert(events.size() == count);
     input[0].mmap[0] = 0x20000 | 4;
-    assert(degauss_controller_negative_axis(0, 3)); // saved stick remains two-sided after native axes change
-    assert(!degauss_controller_negative_axis(1, 3)); // never changes another controller's native axis policy
+    assert(degauss_controller_negative_axis(0, 3, 0)); // saved stick remains two-sided after native axes change
+    assert(!degauss_controller_negative_axis(1, 3, 1)); // never changes another controller's native axis policy
     assert(degauss_controller_custom_key(0, KEY_EMU + 6, 1));
     assert(events.back() == std::make_pair(KEY_LEFT, 1));
     assert(degauss_controller_custom_key(0, KEY_EMU + 7, 0));
