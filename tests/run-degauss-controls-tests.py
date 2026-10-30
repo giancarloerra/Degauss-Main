@@ -38,7 +38,11 @@ negative_start = source.index("static bool degauss_controller_negative_axis(")
 negative = source[negative_start:source.index("\n}\n", negative_start) + 3]
 assert "degauss_controller_negative_axis(dev, ev.code, degauss_source_dev)" in source
 assert source.index("const int degauss_source_dev = i;") < source.index("// redirect further actions to left joycon in combined mode")
-assert "degauss_controller_prepare_capture_axes(instance, error)" in source
+config_threshold = "int treshold = (range * cfg.dpad_threshold) / 200;" in source
+fixed_threshold = "int treshold = range / 4;" in source
+assert config_threshold != fixed_threshold
+threshold_argument = "cfg.dpad_threshold" if config_threshold else "50"
+assert f"degauss_controller_prepare_capture_axes(instance, {threshold_argument}, error)" in source
 axes_start = source.index("static bool degauss_controller_prepare_capture_axes(")
 capture_axes = source[axes_start:source.index("\n}\n", axes_start) + 3]
 axes_harness = r'''
@@ -53,7 +57,7 @@ axes_harness = r'''
 static std::array<std::array<bool, ABS_CNT>, NUMDEV> degauss_controller_capture_negative_axes{};
 static struct { int fd; } pool[NUMDEV] = {{0}, {1}, {2}};
 static struct { bool mouse; int bind; } input[NUMDEV] = {{false,-1}, {false,0}, {false,-1}};
-static bool moved_to_edge = false;
+static int rest_value = 128;
 static bool failed_read = false;
 static bool test_bit(unsigned axis, const unsigned char *bits) { return bits[axis / 8] & (1u << (axis % 8)); }
 static int capture_ioctl(int fd, unsigned long request, void *output) {
@@ -66,7 +70,7 @@ static int capture_ioctl(int fd, unsigned long request, void *output) {
         return 0;
     }
     auto *info = static_cast<input_absinfo *>(output);
-    if (request == EVIOCGABS(0)) *info = {fd || moved_to_edge ? 0 : 128,0,255,0,0,0};
+    if (request == EVIOCGABS(0)) *info = {fd ? 0 : rest_value,0,255,0,0,0};
     else if (request == EVIOCGABS(1)) *info = {0,-32768,32767,0,0,0};
     else if (request == EVIOCGABS(2)) *info = {0,0,255,0,0,0};
     else if (request == EVIOCGABS(3)) *info = {0,0,0,0,0,0};
@@ -81,7 +85,7 @@ static int capture_ioctl(int fd, unsigned long request, void *output) {
 axes_cases = r'''
 int main() {
     std::string error;
-    assert(degauss_controller_prepare_capture_axes(0, error));
+    assert(degauss_controller_prepare_capture_axes(0, 50, error));
     assert(degauss_controller_capture_negative_axes[0][0]); // unsigned centered stick, no native axis mapping
     assert(degauss_controller_capture_negative_axes[0][1]); // signed centered stick
     assert(degauss_controller_capture_negative_axes[1][4]); // bound node belongs to the same controller
@@ -90,11 +94,16 @@ int main() {
     assert(!degauss_controller_capture_negative_axes[0][2]); // zero-rest trigger cannot become a negative press
     assert(!degauss_controller_capture_negative_axes[0][5]); // maximum-rest trigger also remains one-sided
     assert(!degauss_controller_capture_negative_axes[0][3]); // invalid range is not a centered axis
-    moved_to_edge = true;
-    assert(degauss_controller_prepare_capture_axes(0, error));
+    rest_value = 160;
+    assert(degauss_controller_prepare_capture_axes(0, 10, error));
+    assert(!degauss_controller_capture_negative_axes[0][0]); // native sensitivity controls its center window
+    assert(degauss_controller_prepare_capture_axes(0, 50, error));
+    assert(degauss_controller_capture_negative_axes[0][0]);
+    rest_value = 0;
+    assert(degauss_controller_prepare_capture_axes(0, 50, error));
     assert(!degauss_controller_capture_negative_axes[0][0]); // every capture observes fresh resting state
     failed_read = true;
-    assert(!degauss_controller_prepare_capture_axes(0, error));
+    assert(!degauss_controller_prepare_capture_axes(0, 50, error));
     assert(error == std::string("Reading controller axis capabilities: ") + strerror(ENODEV));
 }
 '''

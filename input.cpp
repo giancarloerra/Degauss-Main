@@ -2174,7 +2174,7 @@ static bool degauss_controller_negative_axis(int dev, unsigned axis, int source_
 	return profile && profile->contains(KEY_EMU + axis * 2);
 }
 
-static bool degauss_controller_prepare_capture_axes(int dev, std::string &error)
+static bool degauss_controller_prepare_capture_axes(int dev, unsigned threshold_percent, std::string &error)
 {
 	degauss_controller_capture_negative_axes = {};
 	for (int node = 0; node < NUMDEV; ++node) if (pool[node].fd >= 0 && !input[node].mouse
@@ -2193,7 +2193,7 @@ static bool degauss_controller_prepare_capture_axes(int dev, std::string &error)
 			if (info.maximum <= info.minimum) continue;
 			const int64_t range = static_cast<int64_t>(info.maximum) - info.minimum + 1;
 			const int64_t center = info.minimum + range / 2;
-			const int64_t threshold = range / 4;
+			const int64_t threshold = range * threshold_percent / 200;
 			// Observe the resting position before capture: an unmapped centered
 			// stick needs both edges, while a resting trigger stays one-sided.
 			if (info.value > info.minimum && info.value < info.maximum
@@ -2427,7 +2427,7 @@ static void degauss_controller_command(const char *command)
 		}
 		degauss_controller_cancel_capture();
 		std::string error;
-		if (!degauss_controller_prepare_capture_axes(instance, error)) {
+		if (!degauss_controller_prepare_capture_axes(instance, cfg.dpad_threshold, error)) {
 			degauss_controller_error(token, error);
 			return;
 		}
