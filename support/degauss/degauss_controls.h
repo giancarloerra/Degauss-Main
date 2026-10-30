@@ -12,9 +12,10 @@ namespace degauss_controls {
 
 constexpr unsigned ROLE_COUNT = 10;
 constexpr unsigned MAX_DEVICES = 30;
-constexpr uint32_t INHERIT = UINT32_MAX;
 enum Role { UP, DOWN, LEFT, RIGHT, SELECT, BACK, ACTIONS, MENU, PAGE_PREVIOUS, PAGE_NEXT };
 using Bindings = std::array<uint16_t, ROLE_COUNT>;
+struct Binding { uint16_t code; std::string label; };
+using Controls = std::array<std::vector<Binding>, ROLE_COUNT>;
 
 inline void word(std::vector<uint8_t> &out, uint16_t value)
 {
@@ -31,7 +32,7 @@ inline void text(std::vector<uint8_t> &out, const std::string &value)
 inline std::vector<uint8_t> reply(const char *magic)
 {
 	std::vector<uint8_t> out(magic, magic + 4);
-	word(out, 1);
+	word(out, 2);
 	return out;
 }
 
@@ -44,15 +45,9 @@ struct Reader {
 		at += 2;
 		return true;
 	}
-	bool u32(uint32_t &value) {
-		uint16_t lo, hi;
-		if (!u16(lo) || !u16(hi)) return false;
-		value = lo | (static_cast<uint32_t>(hi) << 16);
-		return true;
-	}
-	bool text(std::string &value) {
+	bool text(std::string &value, size_t maximum = 255) {
 		uint16_t length;
-		if (!u16(length) || !length || length > 255 || at + length > data.size()) return false;
+		if (!u16(length) || !length || length > maximum || at + length > data.size()) return false;
 		value.assign(reinterpret_cast<const char *>(data.data() + at), length);
 		at += length;
 		return value.find('\0') == std::string::npos;
@@ -61,25 +56,40 @@ struct Reader {
 
 struct Profile {
 	std::string id;
-	std::array<uint32_t, ROLE_COUNT> bindings;
-	Bindings resolve(const Bindings &native) const {
-		Bindings result = native;
-		for (unsigned i = 0; i < ROLE_COUNT; ++i)
-			if (bindings[i] != INHERIT) result[i] = static_cast<uint16_t>(bindings[i]);
+	Controls bindings;
+	Bindings primary() const {
+		Bindings result{};
+		for (unsigned i = 0; i < ROLE_COUNT; ++i) if (!bindings[i].empty()) result[i] = bindings[i][0].code;
 		return result;
+	}
+	std::string label(unsigned role) const { return bindings[role].empty() ? "Unassigned" : bindings[role][0].label; }
+	bool contains(uint16_t code) const {
+		for (const auto &role : bindings) for (const auto &binding : role) if (binding.code == code) return true;
+		return false;
 	}
 };
 
-inline bool validate(const Bindings &bindings, std::string &error)
+inline bool validate(const Controls &bindings, std::string &error)
 {
 	for (unsigned i = 0; i < ROLE_COUNT; ++i) {
-		if (!bindings[i] && i <= BACK) {
+		if (bindings[i].empty() && i <= BACK) {
 			error = "A required direction, Select or Back is unassigned";
 			return false;
 		}
-		if (bindings[i]) for (unsigned j = 0; j < i; ++j) if (bindings[i] == bindings[j]) {
-			error = "Two Degauss controls use the same button or axis direction";
-			return false;
+		if (bindings[i].size() > (i < SELECT ? 2U : 1U)) {
+			error = "Too many bindings for a Degauss control"; return false;
+		}
+		for (unsigned at = 0; at < bindings[i].size(); ++at) {
+			const auto &binding = bindings[i][at];
+			if (!binding.code || binding.label.empty() || binding.label.size() > 48 || binding.label.find('\0') != std::string::npos) {
+				error = "Invalid controller binding or label"; return false;
+			}
+			for (unsigned j = 0; j <= i; ++j) for (unsigned n = 0; n < bindings[j].size(); ++n) {
+				if (j == i && n >= at) break;
+				if (binding.code == bindings[j][n].code) {
+					error = "Two Degauss controls use the same button or axis direction"; return false;
+				}
+			}
 		}
 	}
 	return true;
@@ -102,7 +112,7 @@ public:
 		Reader reader{data};
 		reader.at = 4;
 		uint16_t version, count;
-		if (!reader.u16(version) || version != 1 || !reader.u16(count) || count > MAX_DEVICES) {
+		if (!reader.u16(version) || version != 2 || !reader.u16(count) || count > MAX_DEVICES) {
 			error = "Unsupported Degauss controller profile version or count";
 			return false;
 		}
@@ -114,12 +124,19 @@ public:
 				error = "Duplicate controller profile identity"; return false;
 			}
 			for (unsigned role = 0; role < ROLE_COUNT; ++role) {
-				uint32_t &code = profile.bindings[role];
-				if (!reader.u32(code) || (code != INHERIT && code > 65535)
-					|| (!code && role <= BACK)) {
-					error = "Invalid or unassigned required controller binding"; return false;
+				uint16_t size;
+				if (!reader.u16(size) || size > (role < SELECT ? 2U : 1U)) {
+					error = "Invalid controller binding count"; return false;
+				}
+				for (unsigned n = 0; n < size; ++n) {
+					Binding binding{};
+					if (!reader.u16(binding.code) || !reader.text(binding.label, 48)) {
+						error = "Invalid controller binding data"; return false;
+					}
+					profile.bindings[role].push_back(binding);
 				}
 			}
+			if (!validate(profile.bindings, error)) return false;
 			candidate.push_back(profile);
 		}
 		if (reader.at != data.size()) { error = "Trailing controller profile data"; return false; }

@@ -31,7 +31,10 @@ assert "if (menu_degauss_controls_active() && !user_io_osd_is_visible())" in sou
 custom_start = source.index("static bool degauss_controller_custom_key(")
 custom = source[custom_start:source.index("\n}\n", custom_start) + 3]
 assert "!menu_degauss_controls_active() || user_io_osd_is_visible()" in custom
-assert "uinp_send_key" in custom and ".mmap[" not in custom.replace("input[dev].mmap[SYS_AXIS_X + axis]", "native_axis")
+assert "uinp_send_key" in custom and ".mmap[" not in custom
+negative_start = source.index("static bool degauss_controller_negative_axis(")
+negative = source[negative_start:source.index("\n}\n", negative_start) + 3]
+assert "degauss_controller_negative_axis(dev, ev.code)" in source
 menu = (ROOT / "menu.cpp").read_text()
 predicate_start = menu.index("bool menu_degauss_controls_active()")
 predicate = menu[predicate_start:menu.index("\n}", predicate_start)]
@@ -75,13 +78,11 @@ static bool menu_degauss_controls_active() { return frontend; }
 static bool user_io_osd_is_visible() { return osd; }
 static std::string degauss_controller_identity(int dev) { return dev ? "other" : "pad"; }
 static degauss_controls::Bindings native{{10,11,12,13,14,15,16,17,18,19}};
-static degauss_controls::Bindings degauss_controller_native(int) { return native; }
 static constexpr uint16_t KEY_EMU = 1000, KEY_UP = 1, KEY_DOWN = 2,
     KEY_LEFT = 3, KEY_RIGHT = 4, KEY_ENTER = 5, KEY_ESC = 6,
     KEY_TAB = 7, KEY_SPACE = 8, KEY_PAGEUP = 9, KEY_PAGEDOWN = 10;
 static const uint16_t degauss_controller_keys[] = {KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT,
     KEY_ENTER, KEY_ESC, KEY_TAB, KEY_SPACE, KEY_PAGEUP, KEY_PAGEDOWN};
-static constexpr unsigned SYS_AXIS_X = 0;
 static struct { uint32_t mmap[2]; } input[2] = {};
 static std::vector<std::pair<uint16_t, int>> events;
 static void uinp_send_key(uint16_t key, int press) { events.push_back({key, press}); }
@@ -93,17 +94,25 @@ int main() {
     degauss_controls::word(data, 1);
     degauss_controls::text(data, "pad");
     for (unsigned role = 0; role < 10; ++role) {
-        const uint32_t code = role == degauss_controls::SELECT ? 300 : degauss_controls::INHERIT;
-        degauss_controls::word(data, code & 65535);
-        degauss_controls::word(data, code >> 16);
+        const uint16_t code = role == degauss_controls::SELECT ? 300 : native[role];
+        const bool direction = role == degauss_controls::LEFT || role == degauss_controls::RIGHT;
+        degauss_controls::word(data, direction ? 2 : 1);
+        degauss_controls::word(data, code);
+        degauss_controls::text(data, "Saved");
+        if (direction) {
+            degauss_controls::word(data, KEY_EMU + (role == degauss_controls::LEFT ? 6 : 7));
+            degauss_controls::text(data, "Stick");
+        }
     }
     std::string error;
     assert(degauss_controller_profiles.read(data, error));
     assert(!degauss_controller_custom_key(1, 300, 1));
     frontend = false;
     assert(!degauss_controller_custom_key(0, 300, 1));
+    assert(!degauss_controller_negative_axis(0, 3));
     frontend = true; osd = true;
     assert(!degauss_controller_custom_key(0, 300, 1));
+    assert(!degauss_controller_negative_axis(0, 3));
     osd = false;
     assert(events.empty());
     for (unsigned role = 0; role < 10; ++role) {
@@ -117,20 +126,24 @@ int main() {
     assert(degauss_controller_custom_key(0, 14, 1));
     assert(degauss_controller_custom_key(0, 300, 2));
     assert(events.size() == count);
-    input[0].mmap[0] = 0x20000 | 3;
+    input[0].mmap[0] = 0x20000 | 4;
+    assert(degauss_controller_negative_axis(0, 3)); // saved stick remains two-sided after native axes change
+    assert(!degauss_controller_negative_axis(1, 3)); // never changes another controller's native axis policy
     assert(degauss_controller_custom_key(0, KEY_EMU + 6, 1));
     assert(events.back() == std::make_pair(KEY_LEFT, 1));
     assert(degauss_controller_custom_key(0, KEY_EMU + 7, 0));
     assert(events.back() == std::make_pair(KEY_RIGHT, 0));
     count = events.size();
     native[degauss_controls::BACK] = 300;
+    assert(degauss_controller_custom_key(0, 15, 1));
+    assert(events.size() == count + 1 && events.back() == std::make_pair(KEY_ESC, 1));
     assert(degauss_controller_custom_key(0, 300, 1));
-    assert(events.size() == count); // changed native mappings cannot emit an ambiguous action
+    assert(events.back() == std::make_pair(KEY_ENTER, 1)); // custom map never merges later native changes
 }
 '''
 with tempfile.TemporaryDirectory(prefix="degauss-control-routing-") as temporary:
     unit = Path(temporary) / "routing.cpp"
-    unit.write_text(harness + custom + checks)
+    unit.write_text(harness + negative + custom + checks)
     binary = Path(temporary) / "routing"
     subprocess.run([
         "c++", "-std=c++14", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT),
@@ -249,6 +262,51 @@ with tempfile.TemporaryDirectory(prefix="degauss-control-snapshot-") as temporar
                     "-fsanitize=address,undefined", str(unit), "-o", str(binary)], check=True)
     subprocess.run([str(binary)], check=True)
 
+native_start = source.index("static degauss_controls::Bindings degauss_controller_native(")
+native_function = source[native_start:source.index("\n}\n", native_start) + 3]
+alternate_start = source.index("static std::array<uint16_t, 4> degauss_controller_native_alternates(")
+alternate_function = source[alternate_start:source.index("\n}\n", alternate_start) + 3]
+definitions = "\n".join(line for line in (ROOT / "input.h").read_text().splitlines()
+                        if line.startswith("#define SYS_BTN_") or line.startswith("#define SYS_AXIS_")
+                        or line.startswith("#define KEY_EMU "))
+native_harness = r'''
+#include <linux/input.h>
+#include "support/degauss/degauss_controls.h"
+#include <cassert>
+static constexpr int QUIRK_WHEEL = 1;
+static struct { uint32_t mmap[32]; int quirk; } input[1] = {};
+'''
+native_cases = r'''
+int main() {
+    input[0].mmap[SYS_BTN_UP] = 300;
+    input[0].mmap[SYS_AXIS_X] = 0x20000;
+    input[0].mmap[SYS_AXIS_Y] = 0x20001;
+    auto primary = degauss_controller_native(0);
+    auto alternate = degauss_controller_native_alternates(0);
+    assert(primary[degauss_controls::UP] == 300);
+    assert(primary[degauss_controls::LEFT] == KEY_EMU);
+    assert(alternate[degauss_controls::LEFT] == KEY_EMU);
+    assert(alternate[degauss_controls::UP] == KEY_EMU + 2);
+    input[0].mmap[SYS_BTN_L] = 310;
+    input[0].mmap[SYS_BTN_MENU_FUNC] = 310;
+    primary = degauss_controller_native(0);
+    assert(primary[degauss_controls::SELECT] == 310);
+    assert(!primary[degauss_controls::PAGE_PREVIOUS]); // native OK wins over the same shoulder's page action
+    input[0].mmap[SYS_AXIS_X] = UINT32_MAX;
+    input[0].mmap[SYS_AXIS_Y] = UINT32_MAX;
+    assert(!degauss_controller_native_alternates(0)[degauss_controls::LEFT]);
+    assert(!degauss_controller_native(0)[degauss_controls::LEFT]); // unavailable axes never become fictitious buttons
+}
+'''
+if sys.platform.startswith("linux"):
+    with tempfile.TemporaryDirectory(prefix="degauss-control-native-copy-") as temporary:
+        unit = Path(temporary) / "native.cpp"
+        unit.write_text(native_harness + definitions + '\n' + native_function + alternate_function + native_cases)
+        binary = Path(temporary) / "native"
+        subprocess.run(["c++", "-std=c++14", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT),
+                        "-fsanitize=address,undefined", str(unit), "-o", str(binary)], check=True)
+        subprocess.run([str(binary)], check=True)
+
 if sys.platform.startswith("linux"):
     start = source.index("static bool degauss_controller_is_pad(")
     inventory = source[start:source.index("\n}\n", start) + 3]
@@ -306,4 +364,4 @@ int main() {
         subprocess.run(["c++", "-std=c++14", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT),
                         "-fsanitize=address,undefined", str(unit), "-o", str(binary)], check=True)
         subprocess.run([str(binary)], check=True)
-print("Controller profile, inheritance, conflict, malformed-input and frontend-only hook tests passed")
+print("Controller profile, independent mapping, conflict, malformed-input and frontend-only hook tests passed")
