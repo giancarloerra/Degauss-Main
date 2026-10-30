@@ -36,7 +36,32 @@ menu = (ROOT / "menu.cpp").read_text()
 predicate_start = menu.index("bool menu_degauss_controls_active()")
 predicate = menu[predicate_start:menu.index("\n}", predicate_start)]
 assert "degauss_running && menustate == MENU_SCRIPTS_FB2 && is_menu()" in predicate
-assert "video_get_degauss_native_fb() && video_fb_state()" in predicate
+assert "video_fb_state()" in predicate
+assert "video_get_degauss_native_fb" not in predicate
+ownership_harness = r'''
+#include <cassert>
+static bool degauss_running = true, menu_core = true, framebuffer = true;
+static constexpr int MENU_SCRIPTS_FB2 = 1;
+static int menustate = MENU_SCRIPTS_FB2;
+static bool is_menu() { return menu_core; }
+static bool video_fb_state() { return framebuffer; }
+'''
+ownership_cases = r'''
+int main() {
+    assert(menu_degauss_controls_active()); // frontend ownership, independent of analog output selection
+    degauss_running = false; assert(!menu_degauss_controls_active());
+    degauss_running = true; menustate = 0; assert(!menu_degauss_controls_active());
+    menustate = MENU_SCRIPTS_FB2; menu_core = false; assert(!menu_degauss_controls_active());
+    menu_core = true; framebuffer = false; assert(!menu_degauss_controls_active());
+}
+'''
+with tempfile.TemporaryDirectory(prefix="degauss-control-ownership-") as temporary:
+    unit = Path(temporary) / "ownership.cpp"
+    unit.write_text(ownership_harness + predicate + '\n}\n' + ownership_cases)
+    binary = Path(temporary) / "ownership"
+    subprocess.run(["c++", "-std=c++14", "-Wall", "-Wextra", "-Werror",
+                    "-fsanitize=address,undefined", str(unit), "-o", str(binary)], check=True)
+    subprocess.run([str(binary)], check=True)
 
 # Execute the production routing function with isolated Main state. The
 # device/library boundary is covered separately on MiSTer, not by this test.
