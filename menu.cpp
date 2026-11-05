@@ -1142,6 +1142,7 @@ static int MglFilePage(char type, int index, int current_page, uint32_t hdmask)
 	int found = -1;
 	for (int i = 2; const char *p = user_io_get_confstr(i); ++i)
 	{
+		if (!strncmp(p, "DEFMRA,", 7)) continue;
 		int hidden = 0, disabled = 0;
 		while ((p[0] == 'H' || p[0] == 'D' || p[0] == 'h' || p[0] == 'd') && strlen(p) > 2)
 		{
@@ -2577,6 +2578,7 @@ void HandleUI(void)
 		{
 			menustate = MENU_NONE1;
 			mgl->state = 3;
+			break;
 		}
 
 		if (menu)
