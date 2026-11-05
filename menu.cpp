@@ -1155,7 +1155,7 @@ static int MglFilePage(char type, int index, int current_page, uint32_t hdmask)
 		int option_page = 0;
 		if (p[0] == 'P')
 		{
-			if (strlen(p) < 3 || p[1] < '1' || p[1] > '9' || p[2] == ',') continue;
+			if (strlen(p) < 3 || p[1] < '0' || p[1] > '9' || p[2] == ',') continue;
 			option_page = p[1] - '0';
 			p += 2;
 		}
@@ -2168,6 +2168,7 @@ void HandleUI(void)
 	case MENU_GENERIC_MAIN2: {
 		hdmask = spi_uio_cmd16(UIO_GET_OSDMASK, 0);
 		user_io_read_confstr();
+		if (!mgl->done) mgl->item[mgl->current].submenu = -1;
 		if (!flat && !mgl->done)
 		{
 			const int next_page = MglFilePage(mgl->item[mgl->current].type,

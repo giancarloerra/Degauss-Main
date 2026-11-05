@@ -80,20 +80,30 @@ int main() {
     assert(MglFilePage('F', 5, 1, 0) == 1); // Preserve the already selected matching page.
     assert(MglFilePage('F', 3, 0, 0) == 2);
     assert(MglFilePage('S', 3, 0, 0) == 0); // File and image slots are distinct.
+    rows = {"Core", "", "P0F5,JRC,Root page;"};
+    assert(MglFilePage('F', 5, 1, 0) == 0);
     rows = {"Core", "", "H1h2P3F1,ROM,Conditional;", "P4D1F2,ROM,Literal;", "P1,Header;"};
     assert(MglFilePage('F', 1, 0, 1U << 2) == 3);
     assert(MglFilePage('F', 1, 0, (1U << 1) | (1U << 2)) == 0);
     assert(MglFilePage('R', 0, 0, 0) == 0);
-    rows = {"Core", "", "D1P2F5,JRC,Disabled;", "d2P3F6,JRC,Inverse disabled;"};
+    rows = {"Core", "", "S0,IMG,Enabled first row;", "D1P2F5,JRC,Disabled;", "d2P3F6,JRC,Inverse disabled;"};
     assert(MglFilePage('F', 5, 0, 1U << 1) == 0);
     assert(MglFilePage('F', 5, 0, 0) == 2);
     assert(MglFilePage('F', 6, 0, 0) == 0);
     assert(MglFilePage('F', 6, 0, 1U << 2) == 3);
-    description = {false, 0, {{'F', 5, -1}, {'S', 0, -1}}};
+    // mgl_parse zero-initializes every item. A disabled or missing slot
+    // must not retain that zero and activate the first enabled media row.
+    description = {false, 0, {{'F', 5, 0}, {'S', 0, 0}}};
+    test_mask = 1U << 1;
+    page = flat = 0;
+    render_mgl_page();
     bind_mgl_slot('F', 5, 1, 4);
     assert(description.item[0].submenu == -1);
     bind_mgl_slot('F', 5, 0, 4);
     assert(description.item[0].submenu == 4);
+    description.item[0] = {'F', 9, 0};
+    render_mgl_page();
+    assert(description.item[0].submenu == -1);
 }
 '''.replace('PRODUCTION', production).replace('HOOK', hook).replace('BINDING', binding)
 with tempfile.TemporaryDirectory(prefix='degauss-mgl-pages-') as tmp:
