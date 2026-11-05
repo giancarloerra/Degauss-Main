@@ -1135,6 +1135,42 @@ static int gun_idx = 0;
 static int32_t gun_pos[4] = {};
 static int page = 0;
 
+// MGL media can live in a core submenu. Keep the normal visible-row parser
+// and transfer path, but render the page containing the requested slot first.
+static int MglFilePage(char type, int index, int current_page, uint32_t hdmask)
+{
+	int found = -1;
+	for (int i = 2; const char *p = user_io_get_confstr(i); ++i)
+	{
+		int hidden = 0, disabled = 0;
+		while ((p[0] == 'H' || p[0] == 'D' || p[0] == 'h' || p[0] == 'd') && strlen(p) > 2)
+		{
+			const int flag = (hdmask & (1U << user_io_hd_mask(p + 1))) ? 1 : 0;
+			if (p[0] == 'H') hidden |= flag;
+			if (p[0] == 'h') hidden |= (flag ^ 1);
+			if (p[0] == 'D') disabled |= flag;
+			if (p[0] == 'd') disabled |= (flag ^ 1);
+			p += 2;
+		}
+		int option_page = 0;
+		if (p[0] == 'P')
+		{
+			if (strlen(p) < 3 || p[1] < '1' || p[1] > '9' || p[2] == ',') continue;
+			option_page = p[1] - '0';
+			p += 2;
+		}
+		if (hidden || disabled || p[0] != type || (type != 'F' && type != 'S')) continue;
+		int offset = 1;
+		if (p[offset] == 'S') ++offset;
+		if (p[offset] == 'C') ++offset;
+		const int slot = (p[offset] >= '0' && p[offset] <= '9') ? p[offset] - '0' : 0;
+		if (slot != index) continue;
+		if (option_page == current_page) return current_page;
+		if (found < 0) found = option_page;
+	}
+	return found < 0 ? current_page : found;
+}
+
 static void menu_button_name(int button, char *buf, size_t bsize)
 {
 	switch(button)
@@ -2132,6 +2168,25 @@ void HandleUI(void)
 	case MENU_GENERIC_MAIN2: {
 		hdmask = spi_uio_cmd16(UIO_GET_OSDMASK, 0);
 		user_io_read_confstr();
+		if (!flat && !mgl->done)
+		{
+			const int next_page = MglFilePage(mgl->item[mgl->current].type,
+				mgl->item[mgl->current].index, page, hdmask);
+			if (next_page != page)
+			{
+				page = next_page;
+				menusub = firstmenu = 0;
+				for (int i = 2; (p = user_io_get_confstr(i)); ++i)
+				{
+					while ((p[0] == 'H' || p[0] == 'D' || p[0] == 'h' || p[0] == 'd') && strlen(p) > 2) p += 2;
+					if (p[0] == 'P' && p[1] == '0' + page && p[2] == ',')
+					{
+						substrcpy(title, p, 1);
+						break;
+					}
+				}
+			}
+		}
 		uint32_t s_entry = 0;
 		int entry = 0;
 		while(1)
@@ -2256,7 +2311,7 @@ void HandleUI(void)
 							if (p[idx] == 'C') idx++;
 
 							int num = (p[idx] >= '0' && p[idx] <= '9') ? p[idx] - '0' : 0;
-							if (!mgl->done && num == mgl->item[mgl->current].index && (p[0] == mgl->item[mgl->current].type)) mgl->item[mgl->current].submenu = selentry;
+							if (!mgl->done && !d && num == mgl->item[mgl->current].index && (p[0] == mgl->item[mgl->current].type)) mgl->item[mgl->current].submenu = selentry;
 
 							if (is_x86() && x86_get_image_name(num))
 							{

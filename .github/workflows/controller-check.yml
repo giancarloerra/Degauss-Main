@@ -20,6 +20,7 @@ jobs:
       - run: python3 tests/degauss_script_handover_test.py
       - run: python3 tests/degauss_native_scripts_test.py
       - run: python3 tests/run-degauss-core-menu-tests.py
+      - run: python3 tests/run-degauss-mgl-page-tests.py
 
   arm-input-check:
     runs-on: ubuntu-latest
