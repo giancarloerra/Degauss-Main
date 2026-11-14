@@ -2169,7 +2169,6 @@ void HandleUI(void)
 	case MENU_GENERIC_MAIN2: {
 		hdmask = spi_uio_cmd16(UIO_GET_OSDMASK, 0);
 		user_io_read_confstr();
-		if (!mgl->done) mgl->item[mgl->current].submenu = -1;
 		if (!flat && !mgl->done)
 		{
 			const int next_page = MglFilePage(mgl->item[mgl->current].type,
@@ -2313,7 +2312,7 @@ void HandleUI(void)
 							if (p[idx] == 'C') idx++;
 
 							int num = (p[idx] >= '0' && p[idx] <= '9') ? p[idx] - '0' : 0;
-							if (!mgl->done && !d && num == mgl->item[mgl->current].index && (p[0] == mgl->item[mgl->current].type)) mgl->item[mgl->current].submenu = selentry;
+							if (!mgl->done && num == mgl->item[mgl->current].index && (p[0] == mgl->item[mgl->current].type)) mgl->item[mgl->current].submenu = selentry;
 
 							if (is_x86() && x86_get_image_name(num))
 							{
@@ -2604,7 +2603,7 @@ void HandleUI(void)
 				select = 1;
 			}
 
-			if (manual_submenu == menusub)
+			if (mgl->done && manual_submenu == menusub)
 			{
 				if (select)
 				{
@@ -2612,7 +2611,7 @@ void HandleUI(void)
 					menustate = MENU_DOC_FILE_SELECTED;
 				}
 			}
-			else if (dip_submenu == menusub && select)
+			else if (mgl->done && dip_submenu == menusub && select)
 			{
 				menustate = MENU_ARCADE_DIP1;
 				menusub = 0;
@@ -2681,6 +2680,15 @@ void HandleUI(void)
 					entry++;
 
 					if (p[0] == 'F' || p[0] == 'S') addon[0] = 0;
+				}
+
+				// The legacy first row can load the requested media type, not
+				// mount a cartridge as a disk or activate a menu command.
+				if (!mgl->done && (!p || d || p[0] != mgl->item[mgl->current].type))
+				{
+					menustate = MENU_NONE1;
+					mgl->state = 3;
+					break;
 				}
 
 				if (p && !d)
