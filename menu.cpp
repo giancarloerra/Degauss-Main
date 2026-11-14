@@ -1140,6 +1140,7 @@ static int page = 0;
 static int MglFilePage(char type, int index, int current_page, uint32_t hdmask)
 {
 	int found = -1;
+	int disabled_page = -1;
 	for (int i = 2; const char *p = user_io_get_confstr(i); ++i)
 	{
 		if (!strncmp(p, "DEFMRA,", 7)) continue;
@@ -1160,16 +1161,24 @@ static int MglFilePage(char type, int index, int current_page, uint32_t hdmask)
 			option_page = p[1] - '0';
 			p += 2;
 		}
-		if (hidden || disabled || p[0] != type || (type != 'F' && type != 'S')) continue;
+		if (hidden || p[0] != type || (type != 'F' && type != 'S')) continue;
 		int offset = 1;
 		if (p[offset] == 'S') ++offset;
 		if (p[offset] == 'C') ++offset;
 		const int slot = (p[offset] >= '0' && p[offset] <= '9') ? p[offset] - '0' : 0;
 		if (slot != index) continue;
+		// Prefer an enabled match. If the exact slot is only disabled,
+		// render its page so dispatch rejects it instead of using row zero.
+		if (disabled)
+		{
+			if (disabled_page < 0 || option_page == current_page) disabled_page = option_page;
+			continue;
+		}
 		if (option_page == current_page) return current_page;
 		if (found < 0) found = option_page;
 	}
-	return found < 0 ? current_page : found;
+	if (found >= 0) return found;
+	return disabled_page < 0 ? current_page : disabled_page;
 }
 
 static void menu_button_name(int button, char *buf, size_t bsize)

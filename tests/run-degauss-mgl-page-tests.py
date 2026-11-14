@@ -179,9 +179,9 @@ int main() {
     assert(MglFilePage('F', 1, 0, (1U << 1) | (1U << 2)) == 0);
     assert(MglFilePage('R', 0, 0, 0) == 0);
     rows = {"Core", "", "S0,IMG,Enabled first row;", "D1P2F5,JRC,Disabled;", "d2P3F6,JRC,Inverse disabled;"};
-    assert(MglFilePage('F', 5, 0, 1U << 1) == 0);
+    assert(MglFilePage('F', 5, 0, 1U << 1) == 2);
     assert(MglFilePage('F', 5, 0, 0) == 2);
-    assert(MglFilePage('F', 6, 0, 0) == 0);
+    assert(MglFilePage('F', 6, 0, 0) == 3);
     assert(MglFilePage('F', 6, 0, 1U << 2) == 3);
     // Existing MGLs request the historical slots. On the released SNES/NES
     // cores the correct loader is row zero even when the slot doesn't match.
@@ -217,6 +217,26 @@ int main() {
     render_mgl_page();
     bind_mgl_slot(rows[3] + 2, 0, 1);
     transfer_is('S', 1);
+    // A disabled selector on another page is not an absent slot. In
+    // particular, do not mount its image into the enabled first drive.
+    rows = {"Core", "", "S0,IMG,Drive A;", "P1,Secondary drives;", "D2P1S1,IMG,Drive B;"};
+    page = flat = 0;
+    description.item[0] = {'S', 1, 0};
+    description.state = 2;
+    test_mask = 1U << 2;
+    render_mgl_page();
+    if (page == 1) bind_mgl_slot(rows[4] + 4, 1, 0);
+    transfer_is('?', -1);
+    assert(page == 1 && description.state == 3);
+    // An enabled match on a third page still wins over the disabled one.
+    rows.push_back("P2,Expansion;");
+    rows.push_back("P2S1,IMG,Enabled Drive B;");
+    description.item[0] = {'S', 1, 0};
+    render_mgl_page();
+    assert(page == 2);
+    bind_mgl_slot(rows[6] + 2, 0, 0);
+    transfer_is('S', 1);
+    page = 0;
     // The added disabled-row match must not hide another enabled exact match.
     rows = {"Core", "", "F2,ROM,Other;", "F1,ROM,Enabled;", "D2F1,ROM,Disabled;"};
     description.item[0] = {'F', 1, 0};
