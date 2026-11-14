@@ -2197,6 +2197,7 @@ void HandleUI(void)
 			adjvisible = 0;
 			entry = 0;
 			uint32_t selentry = 0;
+			bool mgl_enabled = false;
 			menumask = 0;
 
 			OsdSetTitle(page ? title : user_io_get_core_name());
@@ -2312,7 +2313,12 @@ void HandleUI(void)
 							if (p[idx] == 'C') idx++;
 
 							int num = (p[idx] >= '0' && p[idx] <= '9') ? p[idx] - '0' : 0;
-							if (!mgl->done && num == mgl->item[mgl->current].index && (p[0] == mgl->item[mgl->current].type)) mgl->item[mgl->current].submenu = selentry;
+							if (!mgl->done && num == mgl->item[mgl->current].index &&
+								p[0] == mgl->item[mgl->current].type && (!d || !mgl_enabled))
+							{
+								mgl->item[mgl->current].submenu = selentry;
+								if (!d) mgl_enabled = true;
+							}
 
 							if (is_x86() && x86_get_image_name(num))
 							{

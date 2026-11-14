@@ -12,8 +12,8 @@ production = source[start:end]
 hook_start = source.index('\t\thdmask = spi_uio_cmd16(UIO_GET_OSDMASK, 0);')
 hook_end = source.index('\t\tuint32_t s_entry = 0;', hook_start)
 hook = source[hook_start:hook_end]
-binding_end = source.index('mgl->item[mgl->current].submenu = selentry;') + len(
-    'mgl->item[mgl->current].submenu = selentry;')
+binding_at = source.index('mgl->item[mgl->current].submenu = selentry;')
+binding_end = source.index('\n\n', binding_at)
 binding = source[source.rindex('int idx = 1;', hook_end, binding_end):binding_end]
 select_at = source.index('menusub = mgl->item[mgl->current].submenu;', binding_end)
 lookup_start = source.index('\t\t\t\twhile (1)', select_at)
@@ -50,6 +50,7 @@ struct Mgl { bool done; int current; File item[2]; int state = 0; } description;
 static Mgl *mgl = &description;
 static uint32_t spi_uio_cmd16(int, int) { return test_mask; }
 static void user_io_read_confstr() {}
+static bool mgl_enabled;
 static void substrcpy(char *out, const char *in, int) {
     const char *label = std::strchr(in, ',');
     assert(label);
@@ -58,6 +59,7 @@ static void substrcpy(char *out, const char *in, int) {
 }
 static void render_mgl_page() {
     char *p;
+    mgl_enabled = false;
 HOOK
 }
 static void bind_mgl_slot(const char *p, int d, int selentry) {
@@ -215,6 +217,18 @@ int main() {
     render_mgl_page();
     bind_mgl_slot(rows[3] + 2, 0, 1);
     transfer_is('S', 1);
+    // The added disabled-row match must not hide another enabled exact match.
+    rows = {"Core", "", "F2,ROM,Other;", "F1,ROM,Enabled;", "D2F1,ROM,Disabled;"};
+    description.item[0] = {'F', 1, 0};
+    test_mask = 1U << 2;
+    render_mgl_page();
+    bind_mgl_slot(rows[3], 0, 1);
+    bind_mgl_slot(rows[4] + 2, 1, 2);
+    assert(description.item[0].submenu == 1);
+    transfer_is('F', 1);
+    render_mgl_page();
+    bind_mgl_slot(rows[4] + 2, 1, 2);
+    assert(description.item[0].submenu == 2); // No stale enabled match.
     // PCXT profiles in a different machine mode must not open the JRC as
     // Floppy A when the PCjr cartridge selectors aren't exposed.
     rows = {"PCXT", "", "S0,IMG,Floppy;", "hEP1FC5,JRC,PCjr Cartridge;"};
