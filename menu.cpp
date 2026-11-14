@@ -1137,10 +1137,17 @@ static int page = 0;
 
 // MGL media can live in a core submenu. Keep the normal visible-row parser
 // and transfer path, but render the page containing the requested slot first.
-static int MglFilePage(char type, int index, int current_page, uint32_t hdmask)
+struct MglPage
+{
+	int page;
+	bool exact_slot;
+};
+
+static MglPage MglFilePage(char type, int index, int current_page, uint32_t hdmask)
 {
 	int found = -1;
 	int disabled_page = -1;
+	bool exact_slot = false;
 	for (int i = 2; const char *p = user_io_get_confstr(i); ++i)
 	{
 		if (!strncmp(p, "DEFMRA,", 7)) continue;
@@ -1161,12 +1168,14 @@ static int MglFilePage(char type, int index, int current_page, uint32_t hdmask)
 			option_page = p[1] - '0';
 			p += 2;
 		}
-		if (hidden || p[0] != type || (type != 'F' && type != 'S')) continue;
+		if (p[0] != type || (type != 'F' && type != 'S')) continue;
 		int offset = 1;
 		if (p[offset] == 'S') ++offset;
 		if (p[offset] == 'C') ++offset;
 		const int slot = (p[offset] >= '0' && p[offset] <= '9') ? p[offset] - '0' : 0;
 		if (slot != index) continue;
+		exact_slot = true;
+		if (hidden) continue;
 		// Prefer an enabled match. If the exact slot is only disabled,
 		// render its page so dispatch rejects it instead of using row zero.
 		if (disabled)
@@ -1174,11 +1183,11 @@ static int MglFilePage(char type, int index, int current_page, uint32_t hdmask)
 			if (disabled_page < 0 || option_page == current_page) disabled_page = option_page;
 			continue;
 		}
-		if (option_page == current_page) return current_page;
+		if (option_page == current_page) return {current_page, true};
 		if (found < 0) found = option_page;
 	}
-	if (found >= 0) return found;
-	return disabled_page < 0 ? current_page : disabled_page;
+	if (found >= 0) return {found, true};
+	return {disabled_page < 0 ? current_page : disabled_page, exact_slot};
 }
 
 static void menu_button_name(int button, char *buf, size_t bsize)
@@ -2178,13 +2187,17 @@ void HandleUI(void)
 	case MENU_GENERIC_MAIN2: {
 		hdmask = spi_uio_cmd16(UIO_GET_OSDMASK, 0);
 		user_io_read_confstr();
-		if (!flat && !mgl->done)
+		if (!mgl->done)
 		{
-			const int next_page = MglFilePage(mgl->item[mgl->current].type,
-				mgl->item[mgl->current].index, page, hdmask);
-			if (next_page != page)
+			auto &item = mgl->item[mgl->current];
+			const auto target = MglFilePage(item.type, item.index, page, hdmask);
+			// Only a genuinely unmatched request can use the legacy first
+			// row. Recompute each time so a hidden slot cannot keep a row
+			// number from an earlier render.
+			item.submenu = target.exact_slot ? -1 : 0;
+			if (!flat && target.page != page)
 			{
-				page = next_page;
+				page = target.page;
 				menusub = firstmenu = 0;
 				for (int i = 2; (p = user_io_get_confstr(i)); ++i)
 				{

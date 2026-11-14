@@ -6,8 +6,8 @@ import tempfile
 
 root = Path(__file__).resolve().parents[1]
 source = (root / 'menu.cpp').read_text()
-start = source.index('static int MglFilePage(')
-end = source.index('\n}\n', start) + 3
+start = source.index('struct MglPage\n')
+end = source.index('\n}\n', source.index('static MglPage MglFilePage(', start)) + 3
 production = source[start:end]
 hook_start = source.index('\t\thdmask = spi_uio_cmd16(UIO_GET_OSDMASK, 0);')
 hook_end = source.index('\t\tuint32_t s_entry = 0;', hook_start)
@@ -131,12 +131,14 @@ int main() {
     // Real PCXT layout: cartridge slots are on page 1 and only visible for PCjr.
     rows = {"PCXT", "", "S0,IMG,Floppy;", "hEP1FC5,JRC,Cartridge 1;",
         "hEP1FC6,JRC,Cartridge 2;", "hEP1,System & BIOS;", "S2,VHD,Hard disk;"};
-    assert(MglFilePage('F', 5, 0, 1U << 14) == 1);
-    assert(MglFilePage('F', 6, 0, 1U << 14) == 1);
-    assert(MglFilePage('F', 5, 0, 0) == 0); // Hidden in another machine mode.
-    assert(MglFilePage('S', 0, 1, 0) == 0); // Next MGL item returns to the top.
-    assert(MglFilePage('S', 2, 0, 0) == 0);
-    assert(MglFilePage('F', 7, 1, ~0U) == 1); // No matching page: keep the current page.
+    assert(MglFilePage('F', 5, 0, 1U << 14).page == 1);
+    assert(MglFilePage('F', 6, 0, 1U << 14).page == 1);
+    assert(MglFilePage('F', 5, 0, 0).page == 0); // Hidden in another machine mode.
+    assert(MglFilePage('F', 5, 0, 0).exact_slot);
+    assert(MglFilePage('S', 0, 1, 0).page == 0); // Next MGL item returns to the top.
+    assert(MglFilePage('S', 2, 0, 0).page == 0);
+    assert(MglFilePage('F', 7, 1, ~0U).page == 1); // No matching page: keep the current page.
+    assert(!MglFilePage('F', 7, 1, ~0U).exact_slot);
     // Execute the actual render-state integration, not just the helper.
     test_mask = 1U << 14;
     page = flat = 0;
@@ -166,23 +168,23 @@ int main() {
     render_mgl_page();
     assert(page == 0); // Normal interactive menus are untouched.
     rows = {"Core", "", "F5,JRC,Top;", "P1FC5,JRC,Nested;", "P2FS3,ROM,Nested;"};
-    assert(MglFilePage('F', 5, 0, 0) == 0);
-    assert(MglFilePage('F', 5, 1, 0) == 1); // Preserve the already selected matching page.
-    assert(MglFilePage('F', 3, 0, 0) == 2);
-    assert(MglFilePage('S', 3, 0, 0) == 0); // File and image slots are distinct.
+    assert(MglFilePage('F', 5, 0, 0).page == 0);
+    assert(MglFilePage('F', 5, 1, 0).page == 1); // Preserve the already selected matching page.
+    assert(MglFilePage('F', 3, 0, 0).page == 2);
+    assert(!MglFilePage('S', 3, 0, 0).exact_slot); // File and image slots are distinct.
     rows = {"Core", "", "DEFMRA,default.mra;", "P1F0,ROM,Nested;"};
-    assert(MglFilePage('F', 0, 0, 0) == 1);
+    assert(MglFilePage('F', 0, 0, 0).page == 1);
     rows = {"Core", "", "P0F5,JRC,Root page;"};
-    assert(MglFilePage('F', 5, 1, 0) == 0);
+    assert(MglFilePage('F', 5, 1, 0).page == 0);
     rows = {"Core", "", "H1h2P3F1,ROM,Conditional;", "P4D1F2,ROM,Literal;", "P1,Header;"};
-    assert(MglFilePage('F', 1, 0, 1U << 2) == 3);
-    assert(MglFilePage('F', 1, 0, (1U << 1) | (1U << 2)) == 0);
-    assert(MglFilePage('R', 0, 0, 0) == 0);
+    assert(MglFilePage('F', 1, 0, 1U << 2).page == 3);
+    assert(MglFilePage('F', 1, 0, (1U << 1) | (1U << 2)).page == 0);
+    assert(!MglFilePage('R', 0, 0, 0).exact_slot);
     rows = {"Core", "", "S0,IMG,Enabled first row;", "D1P2F5,JRC,Disabled;", "d2P3F6,JRC,Inverse disabled;"};
-    assert(MglFilePage('F', 5, 0, 1U << 1) == 2);
-    assert(MglFilePage('F', 5, 0, 0) == 2);
-    assert(MglFilePage('F', 6, 0, 0) == 3);
-    assert(MglFilePage('F', 6, 0, 1U << 2) == 3);
+    assert(MglFilePage('F', 5, 0, 1U << 1).page == 2);
+    assert(MglFilePage('F', 5, 0, 0).page == 2);
+    assert(MglFilePage('F', 6, 0, 0).page == 3);
+    assert(MglFilePage('F', 6, 0, 1U << 2).page == 3);
     // Existing MGLs request the historical slots. On the released SNES/NES
     // cores the correct loader is row zero even when the slot doesn't match.
     rows = {"SNES", "", "FS1,SFCSMCBINBS ;", "FS4,SPC;"};
@@ -237,6 +239,22 @@ int main() {
     bind_mgl_slot(rows[6] + 2, 0, 0);
     transfer_is('S', 1);
     page = 0;
+    // The RA save-wait path can redraw before the request is dispatched.
+    // When the OSD mask hides a previously bound slot, both the first row
+    // and the row that takes its old index are unrelated enabled drives.
+    rows = {"Core", "", "S0,IMG,Drive A;", "H2S1,IMG,Requested;", "S2,IMG,Drive C;"};
+    description.item[0] = {'S', 1, 0};
+    description.state = 2;
+    test_mask = 0;
+    render_mgl_page();
+    bind_mgl_slot(rows[3] + 2, 0, 1);
+    assert(description.item[0].submenu == 1);
+    test_mask = 1U << 2;
+    render_mgl_page();
+    bind_mgl_slot(rows[2], 0, 0);
+    bind_mgl_slot(rows[4], 0, 1);
+    assert(description.item[0].submenu < 0);
+    assert(consume_mgl_slot() == 0 && description.state == 3);
     // The added disabled-row match must not hide another enabled exact match.
     rows = {"Core", "", "F2,ROM,Other;", "F1,ROM,Enabled;", "D2F1,ROM,Disabled;"};
     description.item[0] = {'F', 1, 0};
@@ -255,8 +273,7 @@ int main() {
     description = {false, 0, {{'F', 5, 0}, {'S', 1, 0}}};
     render_mgl_page();
     description.state = 2;
-    transfer_is('?', -1);
-    assert(description.state == 3);
+    assert(consume_mgl_slot() == 0 && description.state == 3);
     description.current = 1;
     description.state = 2;
     transfer_is('S', 0); // Preserve legacy image-to-image row zero.
