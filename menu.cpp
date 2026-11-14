@@ -1137,9 +1137,17 @@ static int page = 0;
 
 // MGL media can live in a core submenu. Keep the normal visible-row parser
 // and transfer path, but render the page containing the requested slot first.
-static int MglFilePage(char type, int index, int current_page, uint32_t hdmask)
+struct MglPage
+{
+	int page;
+	bool exact_slot;
+};
+
+static MglPage MglFilePage(char type, int index, int current_page, uint32_t hdmask)
 {
 	int found = -1;
+	int disabled_page = -1;
+	bool exact_slot = false;
 	for (int i = 2; const char *p = user_io_get_confstr(i); ++i)
 	{
 		if (!strncmp(p, "DEFMRA,", 7)) continue;
@@ -1160,16 +1168,26 @@ static int MglFilePage(char type, int index, int current_page, uint32_t hdmask)
 			option_page = p[1] - '0';
 			p += 2;
 		}
-		if (hidden || disabled || p[0] != type || (type != 'F' && type != 'S')) continue;
+		if (p[0] != type || (type != 'F' && type != 'S')) continue;
 		int offset = 1;
 		if (p[offset] == 'S') ++offset;
 		if (p[offset] == 'C') ++offset;
 		const int slot = (p[offset] >= '0' && p[offset] <= '9') ? p[offset] - '0' : 0;
 		if (slot != index) continue;
-		if (option_page == current_page) return current_page;
+		exact_slot = true;
+		if (hidden) continue;
+		// Prefer an enabled match. If the exact slot is only disabled,
+		// render its page so dispatch rejects it instead of using row zero.
+		if (disabled)
+		{
+			if (disabled_page < 0 || option_page == current_page) disabled_page = option_page;
+			continue;
+		}
+		if (option_page == current_page) return {current_page, true};
 		if (found < 0) found = option_page;
 	}
-	return found < 0 ? current_page : found;
+	if (found >= 0) return {found, true};
+	return {disabled_page < 0 ? current_page : disabled_page, exact_slot};
 }
 
 static void menu_button_name(int button, char *buf, size_t bsize)
@@ -2169,14 +2187,17 @@ void HandleUI(void)
 	case MENU_GENERIC_MAIN2: {
 		hdmask = spi_uio_cmd16(UIO_GET_OSDMASK, 0);
 		user_io_read_confstr();
-		if (!mgl->done) mgl->item[mgl->current].submenu = -1;
-		if (!flat && !mgl->done)
+		if (!mgl->done)
 		{
-			const int next_page = MglFilePage(mgl->item[mgl->current].type,
-				mgl->item[mgl->current].index, page, hdmask);
-			if (next_page != page)
+			auto &item = mgl->item[mgl->current];
+			const auto target = MglFilePage(item.type, item.index, page, hdmask);
+			// Only a genuinely unmatched request can use the legacy first
+			// row. Recompute each time so a hidden slot cannot keep a row
+			// number from an earlier render.
+			item.submenu = target.exact_slot ? -1 : 0;
+			if (!flat && target.page != page)
 			{
-				page = next_page;
+				page = target.page;
 				menusub = firstmenu = 0;
 				for (int i = 2; (p = user_io_get_confstr(i)); ++i)
 				{
@@ -2198,6 +2219,7 @@ void HandleUI(void)
 			adjvisible = 0;
 			entry = 0;
 			uint32_t selentry = 0;
+			bool mgl_enabled = false;
 			menumask = 0;
 
 			OsdSetTitle(page ? title : user_io_get_core_name());
@@ -2313,7 +2335,12 @@ void HandleUI(void)
 							if (p[idx] == 'C') idx++;
 
 							int num = (p[idx] >= '0' && p[idx] <= '9') ? p[idx] - '0' : 0;
-							if (!mgl->done && !d && num == mgl->item[mgl->current].index && (p[0] == mgl->item[mgl->current].type)) mgl->item[mgl->current].submenu = selentry;
+							if (!mgl->done && num == mgl->item[mgl->current].index &&
+								p[0] == mgl->item[mgl->current].type && (!d || !mgl_enabled))
+							{
+								mgl->item[mgl->current].submenu = selentry;
+								if (!d) mgl_enabled = true;
+							}
 
 							if (is_x86() && x86_get_image_name(num))
 							{
@@ -2604,7 +2631,7 @@ void HandleUI(void)
 				select = 1;
 			}
 
-			if (manual_submenu == menusub)
+			if (mgl->done && manual_submenu == menusub)
 			{
 				if (select)
 				{
@@ -2612,7 +2639,7 @@ void HandleUI(void)
 					menustate = MENU_DOC_FILE_SELECTED;
 				}
 			}
-			else if (dip_submenu == menusub && select)
+			else if (mgl->done && dip_submenu == menusub && select)
 			{
 				menustate = MENU_ARCADE_DIP1;
 				menusub = 0;
@@ -2681,6 +2708,15 @@ void HandleUI(void)
 					entry++;
 
 					if (p[0] == 'F' || p[0] == 'S') addon[0] = 0;
+				}
+
+				// The legacy first row can load the requested media type, not
+				// mount a cartridge as a disk or activate a menu command.
+				if (!mgl->done && (!p || d || p[0] != mgl->item[mgl->current].type))
+				{
+					menustate = MENU_NONE1;
+					mgl->state = 3;
+					break;
 				}
 
 				if (p && !d)
