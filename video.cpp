@@ -108,6 +108,8 @@ yc_mode yc_modes[20];
 
 static int hdmi_power = 1;
 static int hdmi_need_init = 0;
+static bool degauss_crt_only_active = false;
+static int degauss_hdmi_resume_power = 1;
 
 struct vrr_cap_t
 {
@@ -1787,7 +1789,7 @@ static void hdmi_config_init()
 		}
 	}
 
-	hdmi_power = 1;
+	hdmi_power = !degauss_crt_only_active;
 	hdmi_need_init = 0;
 
 	// address, value
@@ -1800,7 +1802,7 @@ static void hdmi_config_init()
 								// 10 = HPD is from HPD pin
 								// 11 = HPD is always high
 
-		0x41, 0x10,				// Power Down control
+		0x41, (uint8_t)(hdmi_power ? 0x10 : 0x50),	// Power Down control
 		0x9A, 0x70,				// ADI required Write.
 		0x9C, 0x30,				// ADI required Write.
 		0x9D, 0b01100001,		// [7:4] must be b0110!.
@@ -3098,6 +3100,12 @@ void tmds_power(int on)
 
 void video_hdmi_power(int on)
 {
+	if (degauss_crt_only_active)
+	{
+		// Preserve the idle timer's intent without waking the transmitter.
+		degauss_hdmi_resume_power = on;
+		return;
+	}
 	// ADV7513 power-down control. 0 = power on, 1 = power down.
 	if (hdmi_main_fd >= 0)
 	{
@@ -3122,8 +3130,36 @@ void video_hdmi_power(int on)
 	}
 }
 
+static void video_update_degauss_crt_only()
+{
+	static bool warned = false;
+	const bool requested = cfg.degauss_crt_only && menu_degauss_controls_active();
+	const bool separate_analog = !cfg.direct_video &&
+		(cfg.vga_scaler || video_degauss_native_fb_active());
+	if (requested && !separate_analog && !warned)
+		cfg_error("DEGAUSS_CRT_ONLY requires a separate CRT output and direct_video=0");
+	warned = requested && !separate_analog;
+	const bool active = requested && separate_analog;
+	if (active == degauss_crt_only_active) return;
+
+	// Ownership ends on exit, game launch and the native script handover.
+	// The existing HPD path already honours hdmi_power while it is off.
+	if (active)
+	{
+		degauss_hdmi_resume_power = hdmi_power;
+		video_hdmi_power(0);
+		degauss_crt_only_active = true;
+	}
+	else
+	{
+		degauss_crt_only_active = false;
+		video_hdmi_power(degauss_hdmi_resume_power);
+	}
+}
+
 void video_poll()
 {
+	if (cfg.degauss_crt_only || degauss_crt_only_active) video_update_degauss_crt_only();
 	if (!hdmi_has_int()) return;
 
 	cec_poll();

@@ -42,6 +42,7 @@ typedef struct {
 	uint8_t fb_size;
 	uint8_t fb_hscale;
 	uint8_t degauss_native_analog;
+	uint8_t degauss_crt_only;
 	uint8_t fb_terminal;
 	uint8_t osd_rotate;
 	uint16_t osd_timeout;
