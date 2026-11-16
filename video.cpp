@@ -110,6 +110,8 @@ static int hdmi_power = 1;
 static int hdmi_need_init = 0;
 static bool degauss_crt_only_active = false;
 static int degauss_hdmi_resume_power = 1;
+static bool degauss_hdmi_power_pending = false;
+static unsigned long degauss_hdmi_retry_at = 0;
 
 struct vrr_cap_t
 {
@@ -3087,47 +3089,48 @@ void video_reinit()
 	video_menu_bg(-1);
 }
 
-void tmds_power(int on)
+static bool tmds_power(int on)
 {
 	// ADV7513 power-down control. 0 = power on, 1 = power down.
-	if (hdmi_main_fd >= 0)
+	if (hdmi_main_fd < 0) return false;
+	uint8_t val = on ? 0x10 : 0x50;
+	int res = i2c_smbus_write_byte_data(hdmi_main_fd, 0x41, val);
+	if (res < 0) printf("i2c: write error (41 %02X): %d\n", val, res);
+	return res >= 0;
+}
+
+static bool hdmi_apply_power(int on)
+{
+	if (hdmi_main_fd < 0) return false;
+	hdmi_power = on ? 1 : 0;
+	if (!tmds_power(on)) return false;
+	if (!on) return true;
+	if (hdmi_need_init)
 	{
-		uint8_t val = on ? 0x10 : 0x50;
-		int res = i2c_smbus_write_byte_data(hdmi_main_fd, 0x41, val);
-		if (res < 0) printf("i2c: write error (41 %02X): %d\n", val, res);
+		const int status = i2c_smbus_read_byte_data(hdmi_main_fd, 0x42);
+		if (status < 0)
+		{
+			printf("i2c: read error (42): %d\n", status);
+			return false;
+		}
+		if ((status & 0x60) == 0x60) video_reinit();
 	}
+	else
+	{
+		hdmi_config_audio();
+	}
+	return true;
 }
 
 void video_hdmi_power(int on)
 {
-	if (degauss_crt_only_active)
+	if (degauss_crt_only_active || degauss_hdmi_power_pending)
 	{
 		// Preserve the idle timer's intent without waking the transmitter.
 		degauss_hdmi_resume_power = on;
 		return;
 	}
-	// ADV7513 power-down control. 0 = power on, 1 = power down.
-	if (hdmi_main_fd >= 0)
-	{
-		hdmi_power = on ? 1 : 0;
-		tmds_power(on);
-
-		if (on)
-		{
-			if (hdmi_need_init)
-			{
-				uint8_t current_status = i2c_smbus_read_byte_data(hdmi_main_fd, 0x42);
-				bool hpd_high = (current_status & 0x40) != 0; // Bit 6: HPD pin level
-				bool MS_high = (current_status & 0x20) != 0; // Bit 5: Monitor Sense level
-				if (hpd_high && MS_high) video_reinit();
-			}
-			else
-			{
-				// Audio must be re-inited.
-				hdmi_config_audio();
-			}
-		}
-	}
+	hdmi_apply_power(on);
 }
 
 static void video_update_degauss_crt_only()
@@ -3140,26 +3143,23 @@ static void video_update_degauss_crt_only()
 		cfg_error("DEGAUSS_CRT_ONLY requires a separate CRT output and direct_video=0");
 	warned = requested && !separate_analog;
 	const bool active = requested && separate_analog;
-	if (active == degauss_crt_only_active) return;
-
-	// Ownership ends on exit, game launch and the native script handover.
-	// The existing HPD path already honours hdmi_power while it is off.
-	if (active)
+	if (active != degauss_crt_only_active)
 	{
-		degauss_hdmi_resume_power = hdmi_power;
-		video_hdmi_power(0);
-		degauss_crt_only_active = true;
+		if (active && !degauss_hdmi_power_pending) degauss_hdmi_resume_power = hdmi_power;
+		degauss_crt_only_active = active;
+		degauss_hdmi_power_pending = true;
+		degauss_hdmi_retry_at = 0;
 	}
-	else
-	{
-		degauss_crt_only_active = false;
-		video_hdmi_power(degauss_hdmi_resume_power);
-	}
+	// A temporary bus error must not strand the transmitter in the old state.
+	if (!degauss_hdmi_power_pending || hdmi_main_fd < 0 || !CheckTimer(degauss_hdmi_retry_at)) return;
+	degauss_hdmi_power_pending = !hdmi_apply_power(!active && degauss_hdmi_resume_power);
+	if (degauss_hdmi_power_pending) degauss_hdmi_retry_at = GetTimer(250);
 }
 
 void video_poll()
 {
-	if (cfg.degauss_crt_only || degauss_crt_only_active) video_update_degauss_crt_only();
+	if (cfg.degauss_crt_only || degauss_crt_only_active || degauss_hdmi_power_pending)
+		video_update_degauss_crt_only();
 	if (!hdmi_has_int()) return;
 
 	cec_poll();
